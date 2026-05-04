@@ -34,7 +34,12 @@ def generate_launch_description():
             DeclareLaunchArgument("reference_lat", default_value="-6.89148"),
             DeclareLaunchArgument("reference_lon", default_value="107.61066"),
             DeclareLaunchArgument("gps_noise_std_m", default_value="2.0"),
-            DeclareLaunchArgument("trail_name", default_value="ridge_route"),
+            DeclareLaunchArgument(
+                "trail_name",
+                default_value="ridge_route",
+                choices=["ridge_route", "valley_route", "crater_route"],
+            ),
+            DeclareLaunchArgument("hiker_speed_world_units_s", default_value="0.85"),
             DeclareLaunchArgument("tx_power_dbm", default_value="17.0"),
             DeclareLaunchArgument("receiver_sensitivity_dbm", default_value="-126.0"),
             SetEnvironmentVariable(
@@ -60,7 +65,9 @@ def generate_launch_description():
                     common_params,
                     {
                         "gps_noise_std_m": LaunchConfiguration("gps_noise_std_m"),
+                        "speed_world_units_s": LaunchConfiguration("hiker_speed_world_units_s"),
                         "trail_name": trail_name,
+                        "gazebo_pose_control": use_gazebo,
                     },
                 ],
             ),

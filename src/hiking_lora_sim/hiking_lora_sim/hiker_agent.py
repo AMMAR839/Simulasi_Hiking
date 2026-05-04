@@ -1,6 +1,15 @@
 import random
 from math import cos, sin
 
+try:
+    from gz.msgs10.boolean_pb2 import Boolean as GzBoolean
+    from gz.msgs10.pose_pb2 import Pose as GzPose
+    from gz.transport13 import Node as GzNode
+except ImportError:
+    GzBoolean = None
+    GzPose = None
+    GzNode = None
+
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from rclpy.executors import ExternalShutdownException
@@ -29,6 +38,10 @@ class HikerAgent(Node):
         self.declare_parameter("reference_lon", 107.61066)
         self.declare_parameter("publish_rate_hz", 2.0)
         self.declare_parameter("trail_name", ACTIVE_TRAIL_NAME)
+        self.declare_parameter("gazebo_pose_control", True)
+        self.declare_parameter("gazebo_world_name", "hiking_lora_world")
+        self.declare_parameter("gazebo_hiker_model", "hiker")
+        self.declare_parameter("gazebo_pose_timeout_ms", 20)
 
         self.speed_world_units_s = float(self.get_parameter("speed_world_units_s").value)
         self.gps_noise_std_m = float(self.get_parameter("gps_noise_std_m").value)
@@ -36,11 +49,28 @@ class HikerAgent(Node):
         self.reference_lat = float(self.get_parameter("reference_lat").value)
         self.reference_lon = float(self.get_parameter("reference_lon").value)
         self.trail_name = str(self.get_parameter("trail_name").value)
+        self.gazebo_pose_control = parameter_as_bool(
+            self.get_parameter("gazebo_pose_control").value
+        )
+        self.gazebo_world_name = str(self.get_parameter("gazebo_world_name").value)
+        self.gazebo_hiker_model = str(self.get_parameter("gazebo_hiker_model").value)
+        self.gazebo_pose_timeout_ms = int(self.get_parameter("gazebo_pose_timeout_ms").value)
         publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
         if self.trail_name not in TRAILS:
             self.get_logger().warn(f"Unknown trail_name={self.trail_name}; using {ACTIVE_TRAIL_NAME}.")
             self.trail_name = ACTIVE_TRAIL_NAME
         self.trail_points = TRAILS[self.trail_name]
+        self.gz_pose_service = f"/world/{self.gazebo_world_name}/set_pose"
+        self.gz_node = None
+        self.gz_pose_wait_logged = False
+        self.gz_pose_active_logged = False
+        if self.gazebo_pose_control:
+            if GzNode is None:
+                self.get_logger().warn(
+                    "Gazebo Python transport is unavailable; Gazebo hiker visual will not be pose-controlled."
+                )
+            else:
+                self.gz_node = GzNode()
 
         self.pose_pub = self.create_publisher(PoseStamped, "/hiker/pose", 10)
         self.gps_pub = self.create_publisher(NavSatFix, "/hiker/gps", 10)
@@ -115,6 +145,48 @@ class HikerAgent(Node):
             f"gps=({lat:.7f},{lon:.7f})"
         )
         self.status_pub.publish(status)
+        self.publish_gazebo_pose(x, y, yaw, terrain_z)
+
+    def publish_gazebo_pose(self, x: float, y: float, yaw: float, terrain_z: float) -> None:
+        if self.gz_node is None or GzPose is None or GzBoolean is None:
+            return
+
+        pose = GzPose()
+        pose.name = self.gazebo_hiker_model
+        pose.position.x = x
+        pose.position.y = y
+        pose.position.z = terrain_z + 1.05
+        pose.orientation.z = sin(yaw * 0.5)
+        pose.orientation.w = cos(yaw * 0.5)
+
+        ok, response = self.gz_node.request(
+            self.gz_pose_service,
+            pose,
+            GzPose,
+            GzBoolean,
+            max(1, self.gazebo_pose_timeout_ms),
+        )
+        if ok and response.data:
+            if not self.gz_pose_active_logged:
+                self.get_logger().info(
+                    f"Gazebo hiker visual is following {self.trail_name} through {self.gz_pose_service}."
+                )
+                self.gz_pose_active_logged = True
+            return
+
+        if not self.gz_pose_wait_logged:
+            self.get_logger().warn(
+                f"Waiting for Gazebo pose service {self.gz_pose_service}; ROS GPS simulation is still running."
+            )
+            self.gz_pose_wait_logged = True
+
+
+def parameter_as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def main(args=None) -> None:

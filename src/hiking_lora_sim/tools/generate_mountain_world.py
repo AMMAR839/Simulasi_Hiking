@@ -47,7 +47,7 @@ def terrain_dae() -> str:
             b = a + 1
             c = a + grid
             d = c + 1
-            indices.extend((a, c, b, b, c, d))
+            indices.extend((a, b, c, b, d, c))
 
     normals = [[0.0, 0.0, 0.0] for _ in vertices]
     for triangle in range(0, len(indices), 3):
@@ -390,34 +390,15 @@ def hiker_model(active_route: str) -> str:
     start = TRAILS[active_route][0]
     x, y = start
     z = terrain_height_world(x, y) + 1.05
-    waypoints = "\n".join(
-        f"          <waypoint>{fmt(px)} {fmt(py)}</waypoint>" for px, py in TRAILS[active_route]
-    )
     return f"""    <model name="hiker">
+      <static>true</static>
       <pose>{fmt(x)} {fmt(y)} {fmt(z)} 0 0 0.9</pose>
       <link name="body">
-        <inertial>
-          <mass>82</mass>
-          <inertia><ixx>6.0</ixx><iyy>6.0</iyy><izz>2.0</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
-        </inertial>
-        <collision name="body_collision">
-          <pose>0 0 0 0 0 0</pose>
-          <geometry><sphere><radius>0.42</radius></sphere></geometry>
-        </collision>
         <visual name="legs"><pose>0 0 -0.45 0 0 0</pose><geometry><cylinder><radius>0.22</radius><length>0.75</length></cylinder></geometry><material><ambient>0.06 0.08 0.12 1</ambient><diffuse>0.08 0.10 0.16 1</diffuse></material></visual>
         <visual name="torso"><pose>0 0 0.18 0 0 0</pose><geometry><cylinder><radius>0.34</radius><length>0.92</length></cylinder></geometry><material><ambient>0.78 0.38 0.02 1</ambient><diffuse>1.0 0.54 0.06 1</diffuse></material></visual>
         <visual name="head"><pose>0 0 0.86 0 0 0</pose><geometry><sphere><radius>0.24</radius></sphere></geometry><material><ambient>0.55 0.38 0.25 1</ambient><diffuse>0.76 0.55 0.38 1</diffuse></material></visual>
         <visual name="backpack"><pose>-0.34 0 0.18 0 0 0</pose><geometry><box><size>0.24 0.55 0.75</size></box></geometry><material><ambient>0.05 0.15 0.10 1</ambient><diffuse>0.05 0.30 0.18 1</diffuse></material></visual>
       </link>
-      <plugin filename="gz-sim-trajectory-follower-system" name="gz::sim::systems::TrajectoryFollower">
-        <link_name>body</link_name>
-        <loop>false</loop>
-        <force>260</force>
-        <torque>120</torque>
-        <waypoints>
-{waypoints}
-        </waypoints>
-      </plugin>
     </model>
 """
 
