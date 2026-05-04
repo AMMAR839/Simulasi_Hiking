@@ -1,0 +1,10 @@
+scenario:
+  description: >
+    Konfigurasi utama disimpan di hiking_lora_sim/scenario.py agar world,
+    hiker agent, dan radio network memakai daftar track/node yang sama.
+    File ini disediakan sebagai catatan parameter yang bisa dipindahkan ke
+    ROS parameters bila nanti skenario perlu dibuat dinamis.
+  lora_frequency_mhz: 915.0
+  default_tx_power_dbm: 17.0
+  default_receiver_sensitivity_dbm: -126.0
+
