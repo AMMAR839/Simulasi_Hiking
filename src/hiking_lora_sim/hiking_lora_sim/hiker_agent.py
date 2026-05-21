@@ -1,3 +1,4 @@
+import json
 import random
 from math import cos, sin
 
@@ -20,11 +21,15 @@ from std_msgs.msg import String
 from hiking_lora_sim.scenario import (
     ACTIVE_TRAIL_NAME,
     TRAILS,
+    load_scenario_yaml,
     local_to_gps,
     point_on_trail,
     terrain_altitude_m,
     terrain_height_world,
 )
+
+# Time on Air default SF9 (detik) untuk kalkulasi baterai
+_DEFAULT_TOA_S = 0.124
 
 
 class HikerAgent(Node):
@@ -42,6 +47,13 @@ class HikerAgent(Node):
         self.declare_parameter("gazebo_world_name", "hiking_lora_world")
         self.declare_parameter("gazebo_hiker_model", "hiker")
         self.declare_parameter("gazebo_pose_timeout_ms", 20)
+        # Fitur 8: Baterai
+        self.declare_parameter("battery_capacity_mah", 3000.0)
+        self.declare_parameter("tx_current_ma", 120.0)
+        self.declare_parameter("idle_current_ma", 3.0)
+        self.declare_parameter("supply_voltage_v", 3.7)
+        # Fitur 9: Dynamic routes
+        self.declare_parameter("routes_file", "")
 
         self.speed_world_units_s = float(self.get_parameter("speed_world_units_s").value)
         self.gps_noise_std_m = float(self.get_parameter("gps_noise_std_m").value)
@@ -56,10 +68,33 @@ class HikerAgent(Node):
         self.gazebo_hiker_model = str(self.get_parameter("gazebo_hiker_model").value)
         self.gazebo_pose_timeout_ms = int(self.get_parameter("gazebo_pose_timeout_ms").value)
         publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
-        if self.trail_name not in TRAILS:
-            self.get_logger().warn(f"Unknown trail_name={self.trail_name}; using {ACTIVE_TRAIL_NAME}.")
+
+        # Fitur 8: parameter baterai
+        self._battery_capacity_mah = float(self.get_parameter("battery_capacity_mah").value)
+        self._tx_current_ma = float(self.get_parameter("tx_current_ma").value)
+        self._idle_current_ma = float(self.get_parameter("idle_current_ma").value)
+        self._supply_voltage_v = float(self.get_parameter("supply_voltage_v").value)
+        self._dt = 1.0 / max(0.1, publish_rate_hz)
+        self._charge_used_mah = 0.0
+        self._tx_count = 0
+
+        # Fitur 9: muat rute dari YAML jika tersedia
+        routes_file = str(self.get_parameter("routes_file").value)
+        active_trails = TRAILS
+        if routes_file:
+            scenario = load_scenario_yaml(routes_file)
+            if scenario and scenario.get("trails"):
+                active_trails = scenario["trails"]
+                self.get_logger().info(f"Rute dimuat dari: {routes_file}")
+
+        if self.trail_name not in active_trails:
+            self.get_logger().warn(
+                f"Unknown trail_name={self.trail_name}; using {ACTIVE_TRAIL_NAME}."
+            )
             self.trail_name = ACTIVE_TRAIL_NAME
-        self.trail_points = TRAILS[self.trail_name]
+            active_trails = TRAILS
+        self.trail_points = active_trails[self.trail_name]
+
         self.gz_pose_service = f"/world/{self.gazebo_world_name}/set_pose"
         self.gz_node = None
         self.gz_pose_wait_logged = False
@@ -75,10 +110,11 @@ class HikerAgent(Node):
         self.pose_pub = self.create_publisher(PoseStamped, "/hiker/pose", 10)
         self.gps_pub = self.create_publisher(NavSatFix, "/hiker/gps", 10)
         self.status_pub = self.create_publisher(String, "/hiker/status", 10)
+        self.battery_pub = self.create_publisher(String, "/hiker/battery", 10)
 
         self.random = random.Random(42)
         self.start_time = self.get_clock().now()
-        self.timer = self.create_timer(1.0 / max(0.1, publish_rate_hz), self.publish_state)
+        self.timer = self.create_timer(self._dt, self.publish_state)
 
         self.get_logger().info("Hiker GPS simulator started. Publishing /hiker/gps and /hiker/pose.")
 
@@ -124,25 +160,45 @@ class HikerAgent(Node):
         gps.longitude = lon
         gps.altitude = alt
         variance = self.gps_noise_std_m * self.gps_noise_std_m
-        gps.position_covariance = [
-            variance,
-            0.0,
-            0.0,
-            0.0,
-            variance,
-            0.0,
-            0.0,
-            0.0,
-            variance,
-        ]
+        gps.position_covariance = [variance, 0.0, 0.0, 0.0, variance, 0.0, 0.0, 0.0, variance]
         gps.position_covariance_type = NavSatFix.COVARIANCE_TYPE_APPROXIMATED
         self.gps_pub.publish(gps)
+
+        # Fitur 8: hitung dan publish status baterai
+        self._tx_count += 1
+        toa_s = min(_DEFAULT_TOA_S, self._dt)
+        idle_s = max(0.0, self._dt - toa_s)
+        charge_tick = (self._tx_current_ma * toa_s + self._idle_current_ma * idle_s) / 3600.0
+        self._charge_used_mah += charge_tick
+        remaining_mah = max(0.0, self._battery_capacity_mah - self._charge_used_mah)
+        percentage = remaining_mah / self._battery_capacity_mah * 100.0
+        total_energy_mj = self._charge_used_mah / 1000.0 * self._supply_voltage_v * 3600.0
+        hours_remaining = (
+            remaining_mah / (self._tx_current_ma * toa_s / self._dt + self._idle_current_ma * idle_s / self._dt)
+            / 1000.0
+            if self._tx_current_ma > 0
+            else 0.0
+        )
+
+        bat_msg = String()
+        bat_msg.data = json.dumps(
+            {
+                "percentage": round(percentage, 1),
+                "remaining_mah": round(remaining_mah, 1),
+                "used_mah": round(self._charge_used_mah, 1),
+                "tx_count": self._tx_count,
+                "total_energy_mj": round(total_energy_mj, 1),
+                "hours_remaining": round(hours_remaining, 2),
+            },
+            separators=(",", ":"),
+        )
+        self.battery_pub.publish(bat_msg)
 
         status = String()
         status.data = (
             f"hiker track={self.trail_name} x={x:.2f} y={y:.2f} "
             f"terrain_z={terrain_z:.2f} alt={altitude:.1f}m "
-            f"gps=({lat:.7f},{lon:.7f})"
+            f"gps=({lat:.7f},{lon:.7f}) bat={percentage:.1f}%"
         )
         self.status_pub.publish(status)
         self.publish_gazebo_pose(x, y, yaw, terrain_z)

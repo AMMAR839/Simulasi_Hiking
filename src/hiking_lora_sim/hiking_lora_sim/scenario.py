@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from math import atan2, cos, exp, hypot, pi, sin, sqrt
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 DEFAULT_METERS_PER_WORLD_UNIT = 35.0
@@ -248,3 +248,86 @@ def station_radio_altitude_m(
 ) -> float:
     mast_height_m = 14.0 if station.kind == "base" else 10.0
     return terrain_altitude_m(station.x, station.y, meters_per_world_unit) + mast_height_m
+
+
+def load_scenario_yaml(path: str) -> Optional[Dict[str, Any]]:
+    """Muat konfigurasi skenario dari file YAML.
+
+    Mengembalikan dict dengan kunci 'trails', 'lora_nodes', 'base_station',
+    'radio_obstacles', atau None jika file tidak ditemukan / tidak valid.
+    """
+    try:
+        import yaml
+    except ImportError:
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (FileNotFoundError, OSError, yaml.YAMLError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    result: Dict[str, Any] = {}
+
+    # Muat trails
+    raw_trails = data.get("trails")
+    if isinstance(raw_trails, dict):
+        trails: Dict[str, List[Tuple[float, float]]] = {}
+        for name, trail_data in raw_trails.items():
+            waypoints = trail_data.get("waypoints") if isinstance(trail_data, dict) else trail_data
+            if isinstance(waypoints, list) and len(waypoints) >= 2:
+                trails[name] = [
+                    (float(wp[0]), float(wp[1]))
+                    for wp in waypoints
+                    if isinstance(wp, (list, tuple)) and len(wp) >= 2
+                ]
+        if trails:
+            result["trails"] = trails
+
+    # Muat lora_nodes
+    raw_nodes = data.get("lora_nodes")
+    if isinstance(raw_nodes, list):
+        nodes: List[Station] = []
+        for node in raw_nodes:
+            if isinstance(node, dict) and "name" in node:
+                nodes.append(Station(
+                    name=str(node["name"]),
+                    x=float(node.get("x", 0.0)),
+                    y=float(node.get("y", 0.0)),
+                    z=float(node.get("z", 0.0)),
+                    kind=str(node.get("kind", "relay")),
+                ))
+        if nodes:
+            result["lora_nodes"] = nodes
+
+    # Muat base_station
+    raw_base = data.get("base_station")
+    if isinstance(raw_base, dict) and "x" in raw_base:
+        result["base_station"] = Station(
+            name=str(raw_base.get("name", "base_station")),
+            x=float(raw_base["x"]),
+            y=float(raw_base.get("y", 0.0)),
+            z=float(raw_base.get("z", 0.0)),
+            kind=str(raw_base.get("kind", "base")),
+        )
+
+    # Muat radio_obstacles
+    raw_obs = data.get("radio_obstacles")
+    if isinstance(raw_obs, list):
+        obstacles: List[RadioObstacle] = []
+        for obs in raw_obs:
+            if isinstance(obs, dict) and "name" in obs:
+                obstacles.append(RadioObstacle(
+                    name=str(obs["name"]),
+                    x=float(obs.get("x", 0.0)),
+                    y=float(obs.get("y", 0.0)),
+                    radius=float(obs.get("radius", 10.0)),
+                    loss_db=float(obs.get("loss_db", 10.0)),
+                    kind=str(obs.get("kind", "terrain")),
+                ))
+        result["radio_obstacles"] = obstacles
+
+    return result if result else None

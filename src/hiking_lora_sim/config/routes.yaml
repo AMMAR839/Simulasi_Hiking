@@ -1,0 +1,161 @@
+# Konfigurasi Skenario Simulasi Hiking LoRa
+# Salin file ini, edit sesuai kebutuhan, lalu jalankan dengan:
+#   ros2 launch hiking_lora_sim hiking_lora_sim.launch.py routes_file:=/path/ke/file.yaml
+#
+# Koordinat dalam satuan world unit (1 unit = 35 meter default).
+# Titik asal (0,0) berada di tengah dunia simulasi.
+
+# ===========================================================
+# RUTE HIKING
+# Setiap rute adalah daftar waypoint [x, y].
+# Tambahkan rute kustom dengan nama baru di bawah ini.
+# ===========================================================
+trails:
+  ridge_route:
+    waypoints:
+      - [-104.0, -94.0]
+      - [-92.0,  -78.0]
+      - [-77.0,  -62.0]
+      - [-61.0,  -48.0]
+      - [-47.0,  -34.0]
+      - [-35.0,  -18.0]
+      - [-18.0,  -10.0]
+      - [  2.0,   -4.0]
+      - [ 22.0,    9.0]
+      - [ 39.0,   28.0]
+      - [ 54.0,   46.0]
+      - [ 71.0,   63.0]
+      - [ 91.0,   81.0]
+
+  valley_route:
+    waypoints:
+      - [-104.0, -94.0]
+      - [ -96.0, -67.0]
+      - [ -83.0, -43.0]
+      - [ -68.0, -20.0]
+      - [ -50.0,   1.0]
+      - [ -28.0,  19.0]
+      - [  -5.0,  31.0]
+      - [  19.0,  42.0]
+      - [  43.0,  51.0]
+      - [  68.0,  64.0]
+      - [  91.0,  81.0]
+
+  crater_route:
+    waypoints:
+      - [-104.0, -94.0]
+      - [ -82.0, -86.0]
+      - [ -58.0, -72.0]
+      - [ -38.0, -52.0]
+      - [ -16.0, -33.0]
+      - [  10.0, -19.0]
+      - [  31.0,   1.0]
+      - [  46.0,  24.0]
+      - [  54.0,  45.0]
+      - [  42.0,  63.0]
+      - [  63.0,  77.0]
+      - [  91.0,  81.0]
+
+  # Contoh rute kustom — hapus tanda '#' untuk mengaktifkan
+  # custom_route:
+  #   waypoints:
+  #     - [-104.0, -94.0]
+  #     - [  0.0,    0.0]
+  #     - [ 91.0,   81.0]
+
+# ===========================================================
+# NODE LORA (relay)
+# ===========================================================
+lora_nodes:
+  - name: node_basecamp_gate
+    x: -91.0
+    y: -78.0
+    z:   0.0
+    kind: relay
+
+  - name: node_valley_watch
+    x: -66.0
+    y: -23.0
+    z:   0.0
+    kind: relay
+
+  - name: node_forest_pass
+    x: -38.0
+    y: -23.0
+    z:   0.0
+    kind: relay
+
+  - name: node_ridge_mid
+    x:  4.0
+    y: -3.0
+    z:  0.0
+    kind: relay
+
+  - name: node_crater_edge
+    x: 54.0
+    y: 45.0
+    z:  0.0
+    kind: relay
+
+  - name: node_north_saddle
+    x: 70.0
+    y: 64.0
+    z:  0.0
+    kind: relay
+
+  - name: node_summit_view
+    x: 91.0
+    y: 81.0
+    z:  0.0
+    kind: relay
+
+# ===========================================================
+# BASE STATION
+# ===========================================================
+base_station:
+  name: base_station
+  x: -106.0
+  y:  -96.0
+  z:    0.0
+  kind: base
+
+# ===========================================================
+# RINTANGAN RADIO
+# radius dalam world unit; loss_db = tambahan redaman saat sinyal melewati area ini
+# kind: trees / rocks / crater / terrain
+# ===========================================================
+radio_obstacles:
+  - name: lower_dense_forest
+    x:      -55.0
+    y:      -46.0
+    radius:  22.0
+    loss_db: 14.0
+    kind: trees
+
+  - name: valley_forest
+    x:      -38.0
+    y:        5.0
+    radius:  20.0
+    loss_db: 11.0
+    kind: trees
+
+  - name: rocky_cliff_band
+    x:       20.0
+    y:       16.0
+    radius:  18.0
+    loss_db:  9.0
+    kind: rocks
+
+  - name: crater_rim
+    x:       54.0
+    y:       45.0
+    radius:  16.0
+    loss_db: 10.0
+    kind: crater
+
+  - name: summit_shadow_ridge
+    x:       76.0
+    y:       70.0
+    radius:  18.0
+    loss_db:  8.0
+    kind: terrain

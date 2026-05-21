@@ -19,6 +19,7 @@ def generate_launch_description():
 
     use_gazebo = LaunchConfiguration("use_gazebo")
     gz_args = LaunchConfiguration("gz_args")
+    use_dashboard = LaunchConfiguration("use_dashboard")
 
     common_params = {
         "meters_per_world_unit": LaunchConfiguration("meters_per_world_unit"),
@@ -28,11 +29,16 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            # --- Gazebo ---
             DeclareLaunchArgument("use_gazebo", default_value="true"),
             DeclareLaunchArgument("gz_args", default_value="-r -v 3"),
+
+            # --- GPS & skala ---
             DeclareLaunchArgument("meters_per_world_unit", default_value="35.0"),
             DeclareLaunchArgument("reference_lat", default_value="-6.89148"),
             DeclareLaunchArgument("reference_lon", default_value="107.61066"),
+
+            # --- Hiker ---
             DeclareLaunchArgument("gps_noise_std_m", default_value="2.0"),
             DeclareLaunchArgument(
                 "trail_name",
@@ -40,8 +46,33 @@ def generate_launch_description():
                 choices=["ridge_route", "valley_route", "crater_route"],
             ),
             DeclareLaunchArgument("hiker_speed_world_units_s", default_value="0.85"),
+
+            # --- LoRa RF ---
             DeclareLaunchArgument("tx_power_dbm", default_value="17.0"),
-            DeclareLaunchArgument("receiver_sensitivity_dbm", default_value="-126.0"),
+            # Fitur 5: Spreading Factor (7–12, default 9)
+            DeclareLaunchArgument("spreading_factor", default_value="9"),
+            # Fitur 7: Fading model
+            DeclareLaunchArgument("fading_model", default_value="rayleigh"),
+            DeclareLaunchArgument("rician_k_db", default_value="10.0"),
+            # Fitur 10: Cuaca
+            DeclareLaunchArgument(
+                "weather",
+                default_value="clear",
+                choices=["clear", "fog", "light_rain", "heavy_rain", "thunderstorm"],
+            ),
+
+            # --- Fitur 8: Baterai ---
+            DeclareLaunchArgument("battery_capacity_mah", default_value="3000.0"),
+            DeclareLaunchArgument("tx_current_ma", default_value="120.0"),
+            DeclareLaunchArgument("idle_current_ma", default_value="3.0"),
+
+            # --- Fitur 9: Rute dinamis ---
+            DeclareLaunchArgument("routes_file", default_value=""),
+
+            # --- Fitur 6: Dashboard ---
+            DeclareLaunchArgument("use_dashboard", default_value="false"),
+            DeclareLaunchArgument("dashboard_refresh_hz", default_value="0.5"),
+
             SetEnvironmentVariable(
                 "GZ_SIM_RESOURCE_PATH",
                 [
@@ -68,6 +99,12 @@ def generate_launch_description():
                         "speed_world_units_s": LaunchConfiguration("hiker_speed_world_units_s"),
                         "trail_name": trail_name,
                         "gazebo_pose_control": use_gazebo,
+                        # Fitur 8
+                        "battery_capacity_mah": LaunchConfiguration("battery_capacity_mah"),
+                        "tx_current_ma": LaunchConfiguration("tx_current_ma"),
+                        "idle_current_ma": LaunchConfiguration("idle_current_ma"),
+                        # Fitur 9
+                        "routes_file": LaunchConfiguration("routes_file"),
                     },
                 ],
             ),
@@ -79,9 +116,15 @@ def generate_launch_description():
                     common_params,
                     {
                         "tx_power_dbm": LaunchConfiguration("tx_power_dbm"),
-                        "receiver_sensitivity_dbm": LaunchConfiguration(
-                            "receiver_sensitivity_dbm"
-                        ),
+                        # Fitur 5
+                        "spreading_factor": LaunchConfiguration("spreading_factor"),
+                        # Fitur 7
+                        "fading_model": LaunchConfiguration("fading_model"),
+                        "rician_k_db": LaunchConfiguration("rician_k_db"),
+                        # Fitur 9
+                        "routes_file": LaunchConfiguration("routes_file"),
+                        # Fitur 10
+                        "weather": LaunchConfiguration("weather"),
                     },
                 ],
             ),
@@ -89,6 +132,16 @@ def generate_launch_description():
                 package="hiking_lora_sim",
                 executable="base_station_display",
                 output="screen",
+            ),
+            # Fitur 6: Dashboard (opsional)
+            Node(
+                package="hiking_lora_sim",
+                executable="dashboard",
+                output="screen",
+                condition=IfCondition(use_dashboard),
+                parameters=[
+                    {"refresh_rate_hz": LaunchConfiguration("dashboard_refresh_hz")},
+                ],
             ),
         ]
     )
