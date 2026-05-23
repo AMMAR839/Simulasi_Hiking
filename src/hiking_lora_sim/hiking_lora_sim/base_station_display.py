@@ -16,12 +16,14 @@ class BaseStationDisplay(Node):
 
     def location_callback(self, msg: String) -> None:
         payload = json.loads(msg.data)
+        hiker_id = payload.get("hiker_id", "hiker")
         gps = payload["hiker_gps"]
         route = " -> ".join(payload["route"])
         self.last_delivery_stamp = self.get_clock().now()
         self.get_logger().info(
-            "Received hiker location lat=%.7f lon=%.7f alt=%.1fm hops=%d margin=%.1fdB route=%s"
+            "Received %s location lat=%.7f lon=%.7f alt=%.1fm hops=%d margin=%.1fdB route=%s"
             % (
+                hiker_id,
                 gps["lat"],
                 gps["lon"],
                 gps["alt_m"],
@@ -35,7 +37,8 @@ class BaseStationDisplay(Node):
         payload = json.loads(msg.data)
         if payload.get("delivered"):
             return
-        self.get_logger().warn("No base-station delivery for latest hiker packet.")
+        hiker_id = payload.get("hiker_id", "hiker")
+        self.get_logger().warn(f"No base-station delivery for latest packet from {hiker_id}.")
 
 
 def main(args=None) -> None:

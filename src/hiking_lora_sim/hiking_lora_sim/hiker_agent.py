@@ -1,13 +1,15 @@
 import json
 import random
-from math import cos, hypot, sin
+from math import atan2, cos, hypot, sin
 
 try:
     from gz.msgs10.boolean_pb2 import Boolean as GzBoolean
+    from gz.msgs10.entity_factory_pb2 import EntityFactory as GzEntityFactory
     from gz.msgs10.pose_pb2 import Pose as GzPose
     from gz.transport13 import Node as GzNode
 except ImportError:
     GzBoolean = None
+    GzEntityFactory = None
     GzPose = None
     GzNode = None
 
@@ -24,9 +26,11 @@ from hiking_lora_sim.scenario import (
     TRAILS,
     load_scenario_yaml,
     local_to_gps,
+    nearest_trail_progress,
     point_on_trail,
     terrain_altitude_m,
     terrain_height_world,
+    trail_length,
 )
 
 # Time on Air default SF9 (detik) untuk kalkulasi baterai
@@ -103,12 +107,21 @@ class HikerAgent(Node):
         self.declare_parameter("reference_lon", 107.61066)
         self.declare_parameter("publish_rate_hz", 2.0)
         self.declare_parameter("trail_name", ACTIVE_TRAIL_NAME)
+        self.declare_parameter("hiker_id", "hiker")
+        self.declare_parameter("topic_prefix", "")
         self.declare_parameter("gazebo_pose_control", True)
         self.declare_parameter("gazebo_world_name", "hiking_lora_world")
         self.declare_parameter("gazebo_hiker_model", "hiker")
         self.declare_parameter("gazebo_pose_timeout_ms", 50)
         self.declare_parameter("gazebo_visual_rate_hz", 10.0)
         self.declare_parameter("gazebo_hiker_z_offset", _DEFAULT_HIKER_VISUAL_Z_OFFSET)
+        self.declare_parameter("spawn_model", True)
+        self.declare_parameter("spawn_x", "")
+        self.declare_parameter("spawn_y", "")
+        self.declare_parameter("spawn_offset_x", 0.0)
+        self.declare_parameter("spawn_offset_y", 0.0)
+        self.declare_parameter("random_seed", 42)
+        self.declare_parameter("publish_aggregate_topics", False)
         # Baterai
         self.declare_parameter("battery_capacity_mah", 3000.0)
         self.declare_parameter("tx_current_ma", 120.0)
@@ -129,6 +142,10 @@ class HikerAgent(Node):
         self.reference_lat = float(self.get_parameter("reference_lat").value)
         self.reference_lon = float(self.get_parameter("reference_lon").value)
         self.trail_name = str(self.get_parameter("trail_name").value)
+        self.hiker_id = str(self.get_parameter("hiker_id").value)
+        self.topic_prefix = normalize_topic_prefix(
+            str(self.get_parameter("topic_prefix").value)
+        )
         self.gazebo_pose_control = parameter_as_bool(
             self.get_parameter("gazebo_pose_control").value
         )
@@ -137,6 +154,15 @@ class HikerAgent(Node):
         self.gazebo_pose_timeout_ms = int(self.get_parameter("gazebo_pose_timeout_ms").value)
         self.gazebo_visual_rate_hz = float(self.get_parameter("gazebo_visual_rate_hz").value)
         self.gazebo_hiker_z_offset = float(self.get_parameter("gazebo_hiker_z_offset").value)
+        self.spawn_model = parameter_as_bool(self.get_parameter("spawn_model").value)
+        self._spawn_x_raw = str(self.get_parameter("spawn_x").value).strip()
+        self._spawn_y_raw = str(self.get_parameter("spawn_y").value).strip()
+        self._spawn_offset_x = float(self.get_parameter("spawn_offset_x").value)
+        self._spawn_offset_y = float(self.get_parameter("spawn_offset_y").value)
+        self.publish_aggregate_topics = parameter_as_bool(
+            self.get_parameter("publish_aggregate_topics").value
+        )
+        random_seed = int(self.get_parameter("random_seed").value)
         publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
 
         # Baterai
@@ -189,9 +215,41 @@ class HikerAgent(Node):
             self.trail_name = ACTIVE_TRAIL_NAME
             active_trails = TRAILS
         self.trail_points = active_trails[self.trail_name]
+        self._trail_length_world = trail_length(self.trail_points)
+        self._start_distance_world = 0.0
+        self._spawn_connector_length = 0.0
+        self._spawn_x = self.trail_points[0][0] + self._spawn_offset_x
+        self._spawn_y = self.trail_points[0][1] + self._spawn_offset_y
+        self._entry_x = self.trail_points[0][0]
+        self._entry_y = self.trail_points[0][1]
+        self._entry_yaw = 0.0
+        if self._spawn_x_raw and self._spawn_y_raw:
+            try:
+                self._spawn_x = float(self._spawn_x_raw) + self._spawn_offset_x
+                self._spawn_y = float(self._spawn_y_raw) + self._spawn_offset_y
+            except ValueError:
+                self.get_logger().warn(
+                    f"Invalid spawn_x/spawn_y for {self.hiker_id}; using formation offset only."
+                )
+        start_progress = nearest_trail_progress(self._spawn_x, self._spawn_y, self.trail_points)
+        self._start_distance_world = self._trail_length_world * start_progress
+        self._entry_x, self._entry_y, self._entry_yaw = point_on_trail(
+            self._start_distance_world,
+            self.trail_points,
+        )
+        self._spawn_connector_length = hypot(
+            self._entry_x - self._spawn_x,
+            self._entry_y - self._spawn_y,
+        )
+        if self._spawn_connector_length > 0.01:
+            self._entry_yaw = atan2(self._entry_y - self._spawn_y, self._entry_x - self._spawn_x)
 
+        self.gz_create_service = f"/world/{self.gazebo_world_name}/create"
         self.gz_pose_service = f"/world/{self.gazebo_world_name}/set_pose"
         self.gz_node = None
+        self.gz_spawn_done = False
+        self.gz_spawn_wait_logged = False
+        self.gz_spawn_failed_logged = False
         self.gz_pose_wait_logged = False
         self.gz_pose_active_logged = False
         if self.gazebo_pose_control:
@@ -202,12 +260,17 @@ class HikerAgent(Node):
             else:
                 self.gz_node = GzNode()
 
-        self.pose_pub = self.create_publisher(PoseStamped, "/hiker/pose", 10)
-        self.gps_pub = self.create_publisher(NavSatFix, "/hiker/gps", 10)
-        self.status_pub = self.create_publisher(String, "/hiker/status", 10)
-        self.battery_pub = self.create_publisher(String, "/hiker/battery", 10)
+        self.pose_pub = self.create_publisher(PoseStamped, topic_for(self.topic_prefix, "pose", "/hiker/pose"), 10)
+        self.gps_pub = self.create_publisher(NavSatFix, topic_for(self.topic_prefix, "gps", "/hiker/gps"), 10)
+        self.status_pub = self.create_publisher(String, topic_for(self.topic_prefix, "status", "/hiker/status"), 10)
+        self.battery_pub = self.create_publisher(String, topic_for(self.topic_prefix, "battery", "/hiker/battery"), 10)
+        self.aggregate_status_pub = None
+        self.aggregate_battery_pub = None
+        if self.publish_aggregate_topics:
+            self.aggregate_status_pub = self.create_publisher(String, "/hikers/status", 10)
+            self.aggregate_battery_pub = self.create_publisher(String, "/hikers/battery", 10)
 
-        self.random = random.Random(42)
+        self.random = random.Random(random_seed)
         self.start_time = self.get_clock().now()
         self.timer = self.create_timer(self._dt, self.publish_state)
         self.visual_timer = None
@@ -215,7 +278,11 @@ class HikerAgent(Node):
             visual_dt = 1.0 / max(1.0, self.gazebo_visual_rate_hz)
             self.visual_timer = self.create_timer(visual_dt, self.publish_gazebo_visual)
 
-        self.get_logger().info("Hiker GPS simulator started. Publishing /hiker/gps and /hiker/pose.")
+        self.get_logger().info(
+            f"Hiker GPS simulator started for {self.hiker_id}. "
+            f"Publishing {topic_for(self.topic_prefix, 'gps', '/hiker/gps')} and "
+            f"{topic_for(self.topic_prefix, 'pose', '/hiker/pose')}."
+        )
 
     def route_pose_at(self, elapsed: float):
         speed_factor = _WEATHER_SPEED_FACTOR.get(self._weather, 1.0)
@@ -223,10 +290,25 @@ class HikerAgent(Node):
         if self._low_power_mode:
             effective_speed *= 0.85
 
-        distance = elapsed * effective_speed
-        x, y, yaw = point_on_trail(distance, self.trail_points)
+        travel_distance = elapsed * effective_speed
+
+        if self._spawn_connector_length > 0.01 and travel_distance < self._spawn_connector_length:
+            ratio = travel_distance / self._spawn_connector_length
+            x = self._spawn_x + (self._entry_x - self._spawn_x) * ratio
+            y = self._spawn_y + (self._entry_y - self._spawn_y) * ratio
+            yaw = self._entry_yaw
+            terrain_z = terrain_height_world(x, y)
+            return x, y, yaw, terrain_z, speed_factor, effective_speed, False
+
+        path_distance = self._start_distance_world + max(
+            0.0,
+            travel_distance - self._spawn_connector_length,
+        )
+        route_finished = path_distance >= self._trail_length_world
+        x, y, yaw = point_on_trail(path_distance, self.trail_points)
         terrain_z = terrain_height_world(x, y)
-        return x, y, yaw, terrain_z, speed_factor, effective_speed
+        moving_speed = 0.0 if route_finished else effective_speed
+        return x, y, yaw, terrain_z, speed_factor, moving_speed, route_finished
 
     def publish_state(self) -> None:
         # --- Node shutdown saat baterai habis ---
@@ -256,7 +338,7 @@ class HikerAgent(Node):
         if elapsed < self._ttff_delay_s:
             stamp = self.get_clock().now().to_msg()
             # Tetap publish pose ROS meskipun GPS belum fix.
-            x_raw, y_raw, yaw_raw, terrain_z_raw, _, _ = self.route_pose_at(elapsed)
+            x_raw, y_raw, yaw_raw, terrain_z_raw, _, _, _ = self.route_pose_at(elapsed)
             pose = PoseStamped()
             pose.header.stamp = stamp
             pose.header.frame_id = "map"
@@ -269,7 +351,7 @@ class HikerAgent(Node):
 
             gps = NavSatFix()
             gps.header.stamp = stamp
-            gps.header.frame_id = "hiker_gps"
+            gps.header.frame_id = f"{self.hiker_id}_gps"
             gps.status.status = NavSatStatus.STATUS_NO_FIX  # belum ada fix
             gps.status.service = NavSatStatus.SERVICE_GPS
             gps.latitude = 0.0
@@ -283,7 +365,7 @@ class HikerAgent(Node):
             self.get_logger().info(f"GPS fix acquired after {elapsed:.1f}s (TTFF cold start done).")
 
         # --- Kecepatan gerak berdasarkan cuaca ---
-        x, y, yaw, terrain_z, speed_factor, _ = self.route_pose_at(elapsed)
+        x, y, yaw, terrain_z, speed_factor, effective_speed, route_finished = self.route_pose_at(elapsed)
         altitude = terrain_altitude_m(x, y, self.meters_per_world_unit)
 
         # --- GPS DOP berdasarkan posisi (hutan/lembah → DOP buruk) ---
@@ -323,7 +405,7 @@ class HikerAgent(Node):
 
         gps = NavSatFix()
         gps.header.stamp = stamp
-        gps.header.frame_id = "hiker_gps"
+        gps.header.frame_id = f"{self.hiker_id}_gps"
         gps.status.status = NavSatStatus.STATUS_FIX
         gps.status.service = NavSatStatus.SERVICE_GPS
         gps.latitude = lat
@@ -383,6 +465,7 @@ class HikerAgent(Node):
         bat_msg = String()
         bat_msg.data = json.dumps(
             {
+                "hiker_id":              self.hiker_id,
                 "percentage":            round(percentage, 1),
                 "remaining_mah":         round(remaining_mah, 1),
                 "used_mah":              round(self._charge_used_mah, 1),
@@ -400,26 +483,107 @@ class HikerAgent(Node):
             separators=(",", ":"),
         )
         self.battery_pub.publish(bat_msg)
+        if self.aggregate_battery_pub is not None:
+            self.aggregate_battery_pub.publish(bat_msg)
 
         gps_error_m = hypot(noise_east, noise_north)
         status = String()
         status.data = (
-            f"hiker track={self.trail_name} x={x:.2f} y={y:.2f} "
+            f"{self.hiker_id} track={self.trail_name} x={x:.2f} y={y:.2f} "
             f"terrain_z={terrain_z:.2f} alt={altitude:.1f}m "
             f"gps=({lat:.7f},{lon:.7f}) bat={percentage:.1f}% "
             f"dop={dop:.2f} gps_err={gps_error_m:.1f}m "
             f"drift={clock_drift_ms:+.1f}ms hw_delay={hw_delay_ms:.0f}ms "
             f"weather={self._weather} speed_factor={speed_factor:.2f} "
+            f"moving={not route_finished} route_finished={route_finished} "
             f"node_restarted={node_restarted}"
         )
         self.status_pub.publish(status)
+        if self.aggregate_status_pub is not None:
+            aggregate_status = String()
+            aggregate_status.data = json.dumps(
+                {
+                    "hiker_id": self.hiker_id,
+                    "trail_name": self.trail_name,
+                    "x": round(x, 2),
+                    "y": round(y, 2),
+                    "terrain_z": round(terrain_z, 2),
+                    "battery_pct": round(percentage, 1),
+                    "gps_error_m": round(gps_error_m, 1),
+                    "weather": self._weather,
+                    "node_active": self._node_active,
+                    "moving": not route_finished,
+                    "route_finished": route_finished,
+                    "speed_world_units_s": round(effective_speed, 3),
+                    "text": status.data,
+                },
+                separators=(",", ":"),
+            )
+            self.aggregate_status_pub.publish(aggregate_status)
 
     def publish_gazebo_visual(self) -> None:
         if not self._node_active:
             return
         elapsed = (self.get_clock().now() - self.start_time).nanoseconds / 1e9
-        x, y, yaw, terrain_z, _, _ = self.route_pose_at(elapsed)
+        x, y, yaw, terrain_z, _, _, _ = self.route_pose_at(elapsed)
+        self.ensure_gazebo_model(x, y, yaw, terrain_z)
         self.publish_gazebo_pose(x, y, yaw, terrain_z)
+
+    def ensure_gazebo_model(self, x: float, y: float, yaw: float, terrain_z: float) -> None:
+        if (
+            not self.spawn_model
+            or self.gz_spawn_done
+            or self.gz_node is None
+            or GzEntityFactory is None
+            or GzPose is None
+            or GzBoolean is None
+        ):
+            return
+
+        pose = GzPose()
+        pose.position.x = x
+        pose.position.y = y
+        pose.position.z = terrain_z + self.gazebo_hiker_z_offset
+        pose.orientation.z = sin(yaw * 0.5)
+        pose.orientation.w = cos(yaw * 0.5)
+
+        request = GzEntityFactory()
+        request.sdf_filename = "model://hiking_hiker"
+        request.name = self.gazebo_hiker_model
+        request.allow_renaming = False
+        request.pose.CopyFrom(pose)
+
+        ok, response = self.gz_node.request(
+            self.gz_create_service,
+            request,
+            GzEntityFactory,
+            GzBoolean,
+            max(1, self.gazebo_pose_timeout_ms),
+        )
+        if ok and response.data:
+            self.gz_spawn_done = True
+            self.get_logger().info(
+                f"Spawned Gazebo model {self.gazebo_hiker_model} for {self.hiker_id}."
+            )
+            return
+
+        if ok and not response.data:
+            # The model may already exist, for example when running against an old world file.
+            self.gz_spawn_done = True
+            if not self.gz_spawn_failed_logged:
+                self.get_logger().warn(
+                    f"Gazebo model {self.gazebo_hiker_model} was not created; "
+                    "continuing with pose control in case it already exists."
+                )
+                self.gz_spawn_failed_logged = True
+            return
+
+        if not self.gz_spawn_wait_logged:
+            self.get_logger().warn(
+                f"Waiting for Gazebo create service {self.gz_create_service}; "
+                "ROS GPS simulation is still running."
+            )
+            self.gz_spawn_wait_logged = True
 
     def publish_gazebo_pose(self, x: float, y: float, yaw: float, terrain_z: float) -> None:
         if self.gz_node is None or GzPose is None or GzBoolean is None:
@@ -464,6 +628,19 @@ def parameter_as_bool(value) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def normalize_topic_prefix(prefix: str) -> str:
+    prefix = prefix.strip()
+    if not prefix:
+        return ""
+    return "/" + prefix.strip("/")
+
+
+def topic_for(prefix: str, suffix: str, legacy_topic: str) -> str:
+    if not prefix:
+        return legacy_topic
+    return f"{prefix}/{suffix.lstrip('/')}"
 
 
 def main(args=None) -> None:

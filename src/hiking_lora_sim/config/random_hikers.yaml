@@ -1,0 +1,65 @@
+# Konfigurasi multi-pendaki dengan posisi spawn acak.
+#
+# Jalankan contoh ini dengan:
+#   ros2 launch hiking_lora_sim hiking_lora_sim.launch.py \
+#     hikers_file:=/home/ammar/Documents/Simulasi_Hiking/src/hiking_lora_sim/config/random_hikers.yaml
+#
+# Total pendaki tetap dibatasi maksimal 10 oleh launch file.
+
+hikers:
+  # Alias route:
+  #   a = ridge_route
+  #   b = valley_route
+  #   c = crater_route
+  routes:
+    a: 4
+    b: 3
+    c: 3
+
+spawn:
+  # Pilihan mode:
+  #   random_relay    = pendaki muncul acak di sekitar relay LoRa.
+  #   random_highland = pendaki muncul acak di area atas/puncak gunung.
+  #   random_box      = pendaki muncul acak di sekitar center atau x/y range.
+  mode: random_relay
+
+  # Untuk mode random_relay:
+  # Kosongkan relay_name agar tiap pendaki memilih relay secara acak.
+  # Isi relay_name jika ingin semua pendaki muncul di sekitar relay tertentu.
+  # Contoh:
+  # relay_name: node_ridge_mid
+  relay_name: ""
+
+  # Rentang offset dari relay/center dalam world unit.
+  # Dengan skala default 1 world unit = 35 meter.
+  x_offset_range: [-2.0, 2.0]
+  y_offset_range: [-2.0, 2.0]
+
+  # true  = posisi random dari relay/atas diproyeksikan ke path terdekat,
+  #         jadi pendaki langsung jalan di jalur visual.
+  # false = pendaki muncul tepat di titik random lalu bergerak menuju path terdekat.
+  snap_to_path: true
+
+  # Kalau ingin random di area atas gunung, ganti blok spawn menjadi:
+  #
+  # mode: random_highland
+  # x_range: [30.0, 95.0]
+  # y_range: [30.0, 88.0]
+  # min_terrain_z: 24.0
+  # snap_to_path: true
+  #
+  # min_terrain_z adalah tinggi terrain minimal dalam world unit.
+
+  # Kalau ingin random di sekitar base/start, ganti mode menjadi random_box:
+  #
+  # mode: random_box
+  # center: base_start
+  # x_offset_range: [-5.0, 5.0]
+  # y_offset_range: [-4.0, 4.0]
+  # snap_to_path: true
+
+  # Jarak minimal antarpendaki saat spawn, dalam world unit.
+  min_spacing: 1.0
+
+  # Ubah seed untuk mendapatkan pola acak lain.
+  seed: 2026

@@ -10,7 +10,7 @@
 
     <gui fullscreen="0">
       <camera name="user_camera">
-        <pose>-86 -104 46 0 0.72 0.72</pose>
+        <pose>-132 -128 96 0 0.82 0.72</pose>
         <view_controller>orbit</view_controller>
       </camera>
     </gui>
@@ -1761,12 +1761,6 @@
         <visual name="snow_patch1"><pose>80 66 66.9218 0 0 0</pose><geometry><sphere><radius>3</radius></sphere></geometry><material><ambient>0.63 0.644 0.6649999999999999 0.6</ambient><diffuse>0.90 0.92 0.95 0.6</diffuse></material></visual>
       </link>
     </model>
-
-    <include>
-      <uri>model://hiking_hiker</uri>
-      <name>hiker</name>
-      <pose>-104 -94 0.43 0 0 0.9</pose>
-    </include>
 
   </world>
 </sdf>

@@ -46,12 +46,16 @@ class DashboardNode(Node):
         self._events: Deque[Dict] = deque(maxlen=_ROLLING_WINDOW)
         self._last_event: Optional[Dict] = None
         self._last_battery: Optional[Dict] = None
+        self._last_batteries: Dict[str, Dict] = {}
+        self._last_statuses: Dict[str, Dict] = {}
         self._start_time = time.monotonic()
         self._total_packets = 0
         self._delivered_packets = 0
 
         self.create_subscription(String, "/lora/network_event", self._on_event, 10)
         self.create_subscription(String, "/hiker/battery", self._on_battery, 10)
+        self.create_subscription(String, "/hikers/battery", self._on_battery, 10)
+        self.create_subscription(String, "/hikers/status", self._on_status, 10)
 
         self._timer = self.create_timer(1.0 / max(0.1, refresh_hz), self._render)
 
@@ -70,9 +74,20 @@ class DashboardNode(Node):
 
     def _on_battery(self, msg: String) -> None:
         try:
-            self._last_battery = json.loads(msg.data)
+            data = json.loads(msg.data)
         except json.JSONDecodeError:
-            pass
+            return
+        hiker_id = str(data.get("hiker_id", "hiker"))
+        self._last_battery = data
+        self._last_batteries[hiker_id] = data
+
+    def _on_status(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        hiker_id = str(data.get("hiker_id", "hiker"))
+        self._last_statuses[hiker_id] = data
 
     def _render(self) -> None:
         if not sys.stdout.isatty():
@@ -96,6 +111,7 @@ class DashboardNode(Node):
 
         # Waktu & info hiker
         ev = self._last_event
+        hiker_id = "hiker"
         trail_name = "—"
         progress_pct = 0.0
         lat_str = lon_str = alt_str = "—"
@@ -105,6 +121,7 @@ class DashboardNode(Node):
         weather = "—"
 
         if ev:
+            hiker_id = str(ev.get("hiker_id", "hiker"))
             trail_name = ev.get("entry_node", "—") or "—"
             sf_val = ev.get("spreading_factor")
             if sf_val:
@@ -130,7 +147,7 @@ class DashboardNode(Node):
                         trail_name = tname
                         break
 
-        bat = self._last_battery
+        bat = self._last_batteries.get(hiker_id) or self._last_battery
         bat_str = "—"
         bat_color = _WHITE
         if bat:
@@ -140,6 +157,7 @@ class DashboardNode(Node):
             bat_color = _GREEN if pct > 50 else (_YELLOW if pct > 20 else _RED)
 
         lines.append(f"  Waktu      : {_BOLD}{hh:02d}:{mm:02d}:{ss:02d}{_RESET}")
+        lines.append(f"  Pendaki    : {_BOLD}{hiker_id}{_RESET}")
         lines.append(f"  GPS        : lat={lat_str}  lon={lon_str}  alt={alt_str}")
         lines.append(f"  Baterai    : {bat_color}{bat_str}{_RESET}")
         lines.append(f"  Cuaca      : {weather}")
@@ -158,6 +176,14 @@ class DashboardNode(Node):
         lines.append(f"  Total (sesi)     : {self._total_packets}")
         lines.append(f"  Terkirim (window): {_BOLD}{rate_color}{deliv_w}/{total_w}  ({rate_w:.1f}%){_RESET}")
         lines.append(f"  Gagal    (window): {drop_w}")
+        if self._last_batteries:
+            active = []
+            for hid in sorted(self._last_batteries):
+                pct = self._last_batteries[hid].get("percentage", 0.0)
+                active.append(f"{hid}:{pct:.0f}%")
+            lines.append(f"  Pendaki aktif     : {', '.join(active[:5])}")
+            if len(active) > 5:
+                lines.append(f"                      +{len(active) - 5} pendaki lain")
         lines.append(hr())
 
         # Route aktif

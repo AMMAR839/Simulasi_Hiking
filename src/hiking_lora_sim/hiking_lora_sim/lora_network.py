@@ -164,6 +164,10 @@ class LoraNetwork(Node):
         self.declare_parameter("terrain_loss_db_per_km", 2.5)
         self.declare_parameter("reference_lat", -6.89148)
         self.declare_parameter("reference_lon", 107.61066)
+        self.declare_parameter("hiker_id", "hiker")
+        self.declare_parameter("topic_prefix", "")
+        self.declare_parameter("publish_global_events", True)
+        self.declare_parameter("active_hiker_count", 1)
         # SF
         self.declare_parameter("spreading_factor", 9)
         # Fading
@@ -186,6 +190,14 @@ class LoraNetwork(Node):
         self.terrain_loss_db_per_km = float(self.get_parameter("terrain_loss_db_per_km").value)
         self.reference_lat = float(self.get_parameter("reference_lat").value)
         self.reference_lon = float(self.get_parameter("reference_lon").value)
+        self.hiker_id = str(self.get_parameter("hiker_id").value)
+        self.topic_prefix = normalize_topic_prefix(
+            str(self.get_parameter("topic_prefix").value)
+        )
+        self.publish_global_events = parameter_as_bool(
+            self.get_parameter("publish_global_events").value
+        )
+        self.active_hiker_count = max(1, int(self.get_parameter("active_hiker_count").value))
 
         sf_raw = int(self.get_parameter("spreading_factor").value)
         self.spreading_factor = max(7, min(12, sf_raw))
@@ -242,19 +254,50 @@ class LoraNetwork(Node):
         self.last_pose: Optional[PoseStamped] = None
         self.last_gps: Optional[NavSatFix] = None
 
-        self.event_pub = self.create_publisher(String, "/lora/network_event", 10)
-        self.base_pub  = self.create_publisher(String, "/base_station/hiker_location", 10)
-        self.marker_pub = self.create_publisher(MarkerArray, "/lora/markers", 10)
-        self.create_subscription(PoseStamped, "/hiker/pose", self.pose_callback, 10)
-        self.create_subscription(NavSatFix,   "/hiker/gps",  self.gps_callback, 10)
-        self.create_subscription(String, "/hiker/battery", self._on_battery, 10)
+        self.event_pub = self.create_publisher(
+            String, topic_for(self.topic_prefix, "lora/network_event", "/lora/network_event"), 10
+        )
+        self.base_pub = self.create_publisher(
+            String,
+            topic_for(self.topic_prefix, "base_station/hiker_location", "/base_station/hiker_location"),
+            10,
+        )
+        self.marker_pub = self.create_publisher(
+            MarkerArray, topic_for(self.topic_prefix, "lora/markers", "/lora/markers"), 10
+        )
+        self.global_event_pub = None
+        self.global_base_pub = None
+        if self.topic_prefix and self.publish_global_events:
+            self.global_event_pub = self.create_publisher(String, "/lora/network_event", 10)
+            self.global_base_pub = self.create_publisher(String, "/base_station/hiker_location", 10)
+
+        self.create_subscription(
+            PoseStamped,
+            topic_for(self.topic_prefix, "pose", "/hiker/pose"),
+            self.pose_callback,
+            10,
+        )
+        self.create_subscription(
+            NavSatFix,
+            topic_for(self.topic_prefix, "gps", "/hiker/gps"),
+            self.gps_callback,
+            10,
+        )
+        self.create_subscription(
+            String,
+            topic_for(self.topic_prefix, "battery", "/hiker/battery"),
+            self._on_battery,
+            10,
+        )
 
         self.timer = self.create_timer(1.0, self.tick)
         self.get_logger().info(
-            f"LoRa network simulator started. SF={self.spreading_factor} "
+            f"LoRa network simulator started for {self.hiker_id}. "
+            f"SF={self.spreading_factor} "
             f"sensitivity={self.receiver_sensitivity_dbm}dBm "
             f"ToA={self.time_on_air_ms:.1f}ms rate={self.data_rate_bps:.0f}bps "
-            f"fading={self.fading_model} weather={self.weather}"
+            f"fading={self.fading_model} weather={self.weather} "
+            f"active_hikers={self.active_hiker_count}"
         )
 
     # -----------------------------------------------------------------------
@@ -469,7 +512,7 @@ class LoraNetwork(Node):
         # --- Channel collision ---
         collision_drop = False
         if delivered:
-            n_nodes = len(self._lora_nodes) + 1  # +1 untuk hiker
+            n_nodes = len(self._lora_nodes) + self.active_hiker_count
             col_prob = _BASE_COLLISION_PROB * n_nodes * (self.time_on_air_ms / 1000.0)
             if self._collision_rng.random() < col_prob:
                 delivered = False
@@ -487,7 +530,7 @@ class LoraNetwork(Node):
             route = []
 
         # --- Hop latency ---
-        full_route = (["hiker"] + route) if delivered else []
+        full_route = ([self.hiker_id] + route) if delivered else []
         latency = self._compute_hop_latency(full_route)
 
         # --- Packet protocol ---
@@ -509,6 +552,7 @@ class LoraNetwork(Node):
             snr_db = round(worst_rx - _THERMAL_NOISE_DBM, 1)
 
         event = {
+            "hiker_id":       self.hiker_id,
             "stamp":          self.get_clock().now().nanoseconds / 1e9,
             "delivered":      delivered,
             "entry_node":     entry_node.name if entry_node else None,
@@ -543,17 +587,21 @@ class LoraNetwork(Node):
             # Lingkungan
             "temperature_c": round(self._temperature_c, 1),
             "humidity_pct":  round(self._humidity_pct, 1),
+            "active_hiker_count": self.active_hiker_count,
         }
 
         msg = String()
         msg.data = json.dumps(event, separators=(",", ":"))
         self.event_pub.publish(msg)
+        if self.global_event_pub is not None:
+            self.global_event_pub.publish(msg)
 
         if delivered:
             base_msg = String()
             worst_margin_v = min(lk["margin_db"] for lk in all_links) if all_links else 0.0
             base_msg.data = json.dumps(
                 {
+                    "hiker_id":           self.hiker_id,
                     "hiker_gps":         gps_payload,
                     "route":             full_route,
                     "hop_count":         protocol["hop_count"],
@@ -567,9 +615,11 @@ class LoraNetwork(Node):
                 separators=(",", ":"),
             )
             self.base_pub.publish(base_msg)
+            if self.global_base_pub is not None:
+                self.global_base_pub.publish(base_msg)
         else:
             self.get_logger().warn(
-                f"LoRa packet dropped: {event['drop_reason']}. weather={self.weather}"
+                f"LoRa packet dropped for {self.hiker_id}: {event['drop_reason']}. weather={self.weather}"
             )
 
         self.publish_markers(hiker, all_links)
@@ -582,7 +632,7 @@ class LoraNetwork(Node):
         x = float(pose.pose.position.x)
         y = float(pose.pose.position.y)
         altitude = terrain_altitude_m(x, y, self.meters_per_world_unit) + 1.8
-        return Station("hiker", x, y, altitude, "hiker")
+        return Station(self.hiker_id, x, y, altitude, "hiker")
 
     def radio_station(self, station: Station) -> Station:
         return Station(
@@ -894,7 +944,7 @@ class LoraNetwork(Node):
             marker = Marker()
             marker.header.frame_id = "map"
             marker.header.stamp = now
-            marker.ns = "hiker"
+            marker.ns = self.hiker_id
             marker.id = marker_id
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD
@@ -913,14 +963,14 @@ class LoraNetwork(Node):
 
         if hiker is not None and links:
             station_lookup = {s.name: s for s in [self._base_station] + self._lora_nodes}
-            station_lookup["hiker"] = Station(
-                "hiker", hiker.x, hiker.y,
+            station_lookup[self.hiker_id] = Station(
+                self.hiker_id, hiker.x, hiker.y,
                 terrain_height_world(hiker.x, hiker.y) + 2.4, "hiker"
             )
             line = Marker()
             line.header.frame_id = "map"
             line.header.stamp = now
-            line.ns = "lora_route"
+            line.ns = f"{self.hiker_id}_lora_route"
             line.id = marker_id
             line.type = Marker.LINE_LIST
             line.action = Marker.ADD
@@ -934,8 +984,8 @@ class LoraNetwork(Node):
                 end   = station_lookup.get(link["to"])
                 if start is None or end is None:
                     continue
-                sz = start.z if start.name == "hiker" else terrain_height_world(start.x, start.y) + 7.2
-                ez = end.z   if end.name   == "hiker" else terrain_height_world(end.x,   end.y)   + 7.2
+                sz = start.z if start.name == self.hiker_id else terrain_height_world(start.x, start.y) + 7.2
+                ez = end.z   if end.name   == self.hiker_id else terrain_height_world(end.x,   end.y)   + 7.2
                 line.points.append(Point(x=start.x, y=start.y, z=sz))
                 line.points.append(Point(x=end.x,   y=end.y,   z=ez))
             markers.markers.append(line)
@@ -983,6 +1033,27 @@ def segment_intersects_circle(
         return hypot(ax - cx, ay - cy) <= radius
     t = max(0.0, min(1.0, ((cx - ax) * dx + (cy - ay) * dy) / length_sq))
     return hypot(ax + t * dx - cx, ay + t * dy - cy) <= radius
+
+
+def parameter_as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def normalize_topic_prefix(prefix: str) -> str:
+    prefix = prefix.strip()
+    if not prefix:
+        return ""
+    return "/" + prefix.strip("/")
+
+
+def topic_for(prefix: str, suffix: str, legacy_topic: str) -> str:
+    if not prefix:
+        return legacy_topic
+    return f"{prefix}/{suffix.lstrip('/')}"
 
 
 # ---------------------------------------------------------------------------

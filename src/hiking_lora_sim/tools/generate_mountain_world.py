@@ -30,8 +30,6 @@ STREAM_SURFACE_MESH_PATH = TERRAIN_MESH_DIR / "stream_surface.dae"
 _ROCK_DARK   = "0.30 0.28 0.26"
 _ROCK_MID    = "0.44 0.41 0.37"
 _ROCK_LIGHT  = "0.56 0.53 0.48"
-_HIKER_VISUAL_Z_OFFSET = 0.08
-
 _TRAIL_SURFACE_WIDTHS = {
     "ridge_route": 2.2,
     "valley_route": 2.0,
@@ -809,13 +807,6 @@ def snow_cap_model() -> str:
     return blocks
 
 
-def hiker_model(active_route: str) -> str:
-    start = TRAILS[active_route][0]
-    x, y = start
-    z = terrain_height_world(x, y) + _HIKER_VISUAL_Z_OFFSET
-    return include_model("hiker", "hiking_hiker", f"{fmt(x)} {fmt(y)} {fmt(z)} 0 0 0.9")
-
-
 def terrain_model_instance() -> str:
     return """    <model name="wide_mountain_terrain">
       <static>true</static>
@@ -881,7 +872,7 @@ def world_sdf(active_route: str) -> str:
 
     <gui fullscreen="0">
       <camera name="user_camera">
-        <pose>-86 -104 46 0 0.72 0.72</pose>
+        <pose>-132 -128 96 0 0.82 0.72</pose>
         <view_controller>orbit</view_controller>
       </camera>
     </gui>
@@ -929,7 +920,6 @@ def world_sdf(active_route: str) -> str:
 {rock_models()}
 {crater_model()}
 {snow_cap_model()}
-{hiker_model(active_route)}
   </world>
 </sdf>
 """

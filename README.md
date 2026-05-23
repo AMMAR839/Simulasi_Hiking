@@ -142,6 +142,21 @@ Jalankan dengan konfigurasi YAML eksternal:
 ros2 launch hiking_lora_sim hiking_lora_sim.launch.py routes_file:=/home/ammar/Documents/Simulasi_Hiking/src/hiking_lora_sim/config/routes.yaml
 ```
 
+Jalankan banyak pendaki dengan posisi acak dari YAML:
+
+```bash
+ros2 launch hiking_lora_sim hiking_lora_sim.launch.py \
+  hikers_file:=/home/ammar/Documents/Simulasi_Hiking/src/hiking_lora_sim/config/random_hikers.yaml
+```
+
+Test cepat banyak pendaki tanpa Gazebo:
+
+```bash
+ros2 launch hiking_lora_sim hiking_lora_sim.launch.py \
+  use_gazebo:=false \
+  hikers_file:=/home/ammar/Documents/Simulasi_Hiking/src/hiking_lora_sim/config/random_hikers.yaml
+```
+
 Jalankan Gazebo server saja untuk debug headless:
 
 ```bash
@@ -169,6 +184,62 @@ Makna topic:
 - `/lora/network_event`: event JSON berisi status delivered/drop, entry node, rute hop, link budget, obstacle, dan margin.
 - `/base_station/hiker_location`: paket lokasi yang berhasil sampai ke base station.
 - `/lora/markers`: marker node, hiker, dan link radio untuk visualisasi.
+
+## Menampilkan Data Semua Pendaki
+
+Untuk multi-pendaki, setiap pendaki punya namespace sendiri:
+
+```text
+/hiker_1/...
+/hiker_2/...
+/hiker_3/...
+```
+
+Topic agregat untuk semua pendaki:
+
+```bash
+ros2 topic echo /hikers/status --field data
+ros2 topic echo /hikers/battery --field data
+ros2 topic echo /lora/network_event --field data
+ros2 topic echo /base_station/hiker_location --field data
+```
+
+Maknanya:
+
+- `/hikers/status`: status semua pendaki, termasuk `hiker_id`, rute, posisi, baterai, status bergerak, dan apakah sudah sampai ujung route.
+- `/hikers/battery`: baterai semua pendaki, termasuk persentase, sisa mAh, TX count, voltage, low-power mode, dan effective TX power.
+- `/lora/network_event`: event LoRa semua pendaki, termasuk `hiker_id`, delivered/drop, entry node, route hop, margin, obstacle, duty cycle, collision, dan latency.
+- `/base_station/hiker_location`: hanya paket lokasi pendaki yang berhasil sampai ke base station.
+
+Menampilkan data pendaki tertentu, contoh `hiker_3`:
+
+```bash
+ros2 topic echo /hiker_3/gps
+ros2 topic echo /hiker_3/pose
+ros2 topic echo /hiker_3/status
+ros2 topic echo /hiker_3/battery
+ros2 topic echo /hiker_3/lora/network_event
+```
+
+Cek semua topic pendaki yang aktif:
+
+```bash
+ros2 topic list | grep hiker
+```
+
+Menyalakan dashboard terminal:
+
+```bash
+ros2 launch hiking_lora_sim hiking_lora_sim.launch.py \
+  hikers_file:=/home/ammar/Documents/Simulasi_Hiking/src/hiking_lora_sim/config/random_hikers.yaml \
+  use_dashboard:=true
+```
+
+Merekam data untuk laporan atau analisis:
+
+```bash
+ros2 bag record /hikers/status /hikers/battery /lora/network_event /base_station/hiker_location
+```
 
 ## Logika LoRa
 
