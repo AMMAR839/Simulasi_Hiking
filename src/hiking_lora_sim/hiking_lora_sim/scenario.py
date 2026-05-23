@@ -132,10 +132,10 @@ def point_on_trail(
 def terrain_height_world(x: float, y: float) -> float:
     """Procedural mountain height in Gazebo world units."""
     north_climb = 0.055 * (y + WORLD_EXTENT)
-    summit = 25.0 * gaussian2d(x, y, 74.0, 70.0, 42.0, 34.0)
-    east_peak = 12.0 * gaussian2d(x, y, 38.0, 38.0, 34.0, 42.0)
-    west_ridge = 10.0 * ridge_gaussian(x, y, -0.35, -32.0, 15.0, -45.0, 80.0)
-    main_ridge = 12.0 * ridge_gaussian(x, y, 0.55, 15.0, 13.0, 25.0, 92.0)
+    summit = 36.0 * gaussian2d(x, y, 74.0, 70.0, 42.0, 34.0)
+    east_peak = 17.0 * gaussian2d(x, y, 38.0, 38.0, 34.0, 42.0)
+    west_ridge = 14.0 * ridge_gaussian(x, y, -0.35, -32.0, 15.0, -45.0, 80.0)
+    main_ridge = 16.0 * ridge_gaussian(x, y, 0.55, 15.0, 13.0, 25.0, 92.0)
     valley_cut = 9.5 * gaussian2d(x, y, -58.0, -4.0, 30.0, 45.0)
     south_valley = 4.5 * gaussian2d(x, y, -78.0, -75.0, 24.0, 22.0)
 
