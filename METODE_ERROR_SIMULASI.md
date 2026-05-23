@@ -40,21 +40,24 @@ Bagian ini merangkum rumus yang dipakai oleh simulasi. Beberapa rumus adalah mod
 
 Untuk dua station `A(x1, y1, z1)` dan `B(x2, y2, z2)`:
 
-```text
-dx_m = (x1 - x2) * S
-dy_m = (y1 - y2) * S
-dz_m = z1 - z2
-d_m  = max(sqrt(dx_m^2 + dy_m^2 + dz_m^2), 1.0)
-d_km = d_m / 1000
-```
+$$
+\begin{aligned}
+d_{x,m} &= (x_1 - x_2)S \\
+d_{y,m} &= (y_1 - y_2)S \\
+d_{z,m} &= z_1 - z_2 \\
+d_m &= \max\left(\sqrt{d_{x,m}^2 + d_{y,m}^2 + d_{z,m}^2},\ 1.0\right) \\
+d_{km} &= \frac{d_m}{1000}
+\end{aligned}
+$$
 
 Rumus ini dipakai sebelum menghitung FSPL, obstacle, cuaca, fading, dan semua loss berbasis jarak.
 
 ### 2. Free-Space Path Loss
 
-```text
-FSPL_dB = 32.44 + 20 log10(d_km) + 20 log10(f_MHz)
-```
+$$
+L_{\mathrm{FSPL}} =
+32.44 + 20\log_{10}(d_{km}) + 20\log_{10}(f_{MHz})
+$$
 
 Ini mengikuti bentuk praktis free-space basic transmission loss pada Recommendation ITU-R P.525.
 
@@ -62,39 +65,53 @@ Ini mengikuti bentuk praktis free-space basic transmission loss pada Recommendat
 
 Obstacle radio berbentuk lingkaran `C(cx, cy, r)`. Link radio dari `A(ax, ay)` ke `B(bx, by)` dianggap melewati obstacle jika jarak titik terdekat pada segmen garis ke pusat lingkaran lebih kecil dari radius.
 
-```text
-AB = (bx - ax, by - ay)
-AC = (cx - ax, cy - ay)
-t  = clamp((AC . AB) / |AB|^2, 0, 1)
-P  = A + t * AB
-d_min = sqrt((px - cx)^2 + (py - cy)^2)
+$$
+\begin{aligned}
+\vec{AB} &= (b_x-a_x,\ b_y-a_y) \\
+\vec{AC} &= (c_x-a_x,\ c_y-a_y) \\
+t &= \operatorname{clamp}\left(\frac{\vec{AC}\cdot\vec{AB}}{\lVert \vec{AB}\rVert^2},\ 0,\ 1\right) \\
+P &= A + t\vec{AB} \\
+d_{\min} &= \sqrt{(p_x-c_x)^2 + (p_y-c_y)^2}
+\end{aligned}
+$$
 
-intersect = d_min < r
-```
+$$
+\mathrm{intersect} =
+\begin{cases}
+1, & d_{\min} < r \\
+0, & d_{\min} \ge r
+\end{cases}
+$$
 
 Jika memotong obstacle, kedalaman lintasan dihitung sebagai chord:
 
-```text
-chord_world = 2 * sqrt(r^2 - d_min^2)
-chord_m     = chord_world * S
-ref_chord_m = 2 * r * S
-depth_factor = chord_m / ref_chord_m
-```
+$$
+\begin{aligned}
+c_{\mathrm{world}} &= 2\sqrt{r^2-d_{\min}^2} \\
+c_m &= c_{\mathrm{world}}S \\
+c_{\mathrm{ref},m} &= 2rS \\
+F_{\mathrm{depth}} &= \frac{c_m}{c_{\mathrm{ref},m}}
+\end{aligned}
+$$
 
 ### 4. Obstacle Loss untuk Pohon, Batu, Kawah, Terrain
 
 Untuk obstacle bukan pohon:
 
-```text
-L_obstacle = loss_db * depth_factor
-```
+$$
+L_{\mathrm{obstacle}} = L_{\mathrm{base}}F_{\mathrm{depth}}
+$$
 
 Untuk obstacle `trees`:
 
-```text
-epsilon_wind ~ Uniform(-0.05, 0.05)
-L_trees = loss_db * depth_factor * wet_factor(weather) * (1 + epsilon_wind)
-```
+$$
+\epsilon_{\mathrm{wind}} \sim U(-0.05,\ 0.05)
+$$
+
+$$
+L_{\mathrm{trees}} =
+L_{\mathrm{base}}F_{\mathrm{depth}}F_{\mathrm{wet}}(w)(1+\epsilon_{\mathrm{wind}})
+$$
 
 Faktor `wet_factor`:
 
@@ -112,84 +129,88 @@ Model ini adalah penyederhanaan dari ide attenuation in vegetation: makin dalam 
 
 Link radio disampling pada `18` titik di antara TX dan RX. Pada setiap titik `i`, posisi dan tinggi garis LOS dihitung:
 
-```text
-ratio = i / sample_count
-x_i = x_tx + (x_rx - x_tx) * ratio
-y_i = y_tx + (y_rx - y_tx) * ratio
-line_alt_i = z_tx + (z_rx - z_tx) * ratio
-terrain_alt_i = terrain_altitude_m(x_i, y_i)
-```
+$$
+\begin{aligned}
+\rho_i &= \frac{i}{N_s} \\
+x_i &= x_{tx} + (x_{rx}-x_{tx})\rho_i \\
+y_i &= y_{tx} + (y_{rx}-y_{tx})\rho_i \\
+z_{\mathrm{LOS},i} &= z_{tx} + (z_{rx}-z_{tx})\rho_i \\
+z_{\mathrm{terrain},i} &= h_{\mathrm{terrain}}(x_i,y_i)
+\end{aligned}
+$$
 
 Koreksi kelengkungan bumi:
 
-```text
-d1 = ratio * horizontal_distance_m
-d2 = (1 - ratio) * horizontal_distance_m
-curvature_m = (d1 * d2) / (2 * R_earth)
-terrain_alt_eff = terrain_alt_i + curvature_m
-```
+$$
+\begin{aligned}
+d_1 &= \rho_i d_{\mathrm{horiz}} \\
+d_2 &= (1-\rho_i)d_{\mathrm{horiz}} \\
+C_{\mathrm{earth}} &= \frac{d_1d_2}{2R_{\mathrm{earth}}} \\
+z_{\mathrm{terrain,eff},i} &= z_{\mathrm{terrain},i} + C_{\mathrm{earth}}
+\end{aligned}
+$$
 
 Clearance Fresnel heuristik:
 
-```text
-fresnel_clearance_m = 8.0 + 0.012 * min(i, sample_count - i) * S
-```
+$$
+C_{\mathrm{Fresnel},i} = 8.0 + 0.012 \cdot \min(i,\ N_s-i)S
+$$
 
 Sampel dianggap terhalang jika:
 
-```text
-terrain_alt_eff + fresnel_clearance_m > line_alt_i
-```
+$$
+z_{\mathrm{terrain,eff},i} + C_{\mathrm{Fresnel},i} > z_{\mathrm{LOS},i}
+$$
 
 Loss akhirnya:
 
-```text
-L_shadow = min(22.0, 3.2 * obstructed_samples)
-```
+$$
+L_{\mathrm{shadow}} = \min(22.0,\ 3.2N_{\mathrm{blocked}})
+$$
 
 ### 6. Knife-Edge Diffraction
 
 Jika ada titik terrain yang melewati garis LOS, kode mengambil clearance terburuk `h`:
 
-```text
-h = terrain_alt_eff - line_alt
-```
+$$
+h = z_{\mathrm{terrain,eff}} - z_{\mathrm{LOS}}
+$$
 
 Panjang gelombang:
 
-```text
-lambda = c / (f_MHz * 10^6)
-```
+$$
+\lambda = \frac{c}{f_{MHz}\cdot10^6}
+$$
 
 Parameter Fresnel-Kirchhoff:
 
-```text
-nu = h * sqrt(2 * (d1 + d2) / (lambda * d1 * d2))
-```
+$$
+\nu = h\sqrt{\frac{2(d_1+d_2)}{\lambda d_1d_2}}
+$$
 
 Loss knife-edge:
 
-```text
-L_ke = 6.02 + 9.11 * nu + 1.27 * nu^2
-```
+$$
+L_{\mathrm{ke}} = 6.02 + 9.11\nu + 1.27\nu^2
+$$
 
 Kode memakai difraksi hanya jika `nu > -0.7`, lalu menghindari double-counting dengan shadow loss:
 
-```text
-L_diffraction = max(0, L_ke - L_shadow)
-```
+$$
+L_{\mathrm{diffraction}} = \max(0,\ L_{\mathrm{ke}} - L_{\mathrm{shadow}})
+$$
 
 ### 7. Terrain Scatter Loss
 
-```text
-L_terrain = d_km * terrain_loss_db_per_km
-```
+$$
+L_{\mathrm{terrain}} = d_{km}K_{\mathrm{terrain}}
+$$
 
 Default:
 
-```text
-terrain_loss_db_per_km = 2.5
-```
+$$
+K_{\mathrm{terrain}} = 2.5\ \mathrm{dB/km}
+$$
 
 Ini adalah loss tambahan berbasis jarak untuk menggambarkan sebaran/pantulan terrain yang tidak masuk langsung ke model shadow.
 
@@ -197,9 +218,9 @@ Ini adalah loss tambahan berbasis jarak untuk menggambarkan sebaran/pantulan ter
 
 Kode memakai profil cuaca:
 
-```text
-L_weather = attn_db_km(weather) * d_km + noise_db(weather)
-```
+$$
+L_{\mathrm{weather}} = a_w d_{km} + n_w
+$$
 
 | weather | attn_db_km | noise_db | extra_drop_prob |
 |---|---:|---:|---:|
@@ -211,96 +232,102 @@ L_weather = attn_db_km(weather) * d_km + noise_db(weather)
 
 Tambahan drop cuaca:
 
-```text
-weather_drop = random() < extra_drop_prob(weather)
-```
+$$
+P_{\mathrm{weather\ drop}} = p_w
+$$
 
 Model ini sengaja lebih sederhana dari ITU-R P.838. P.838 memakai:
 
-```text
-gamma_R = k * R^alpha
-```
+$$
+\gamma_R = kR^{\alpha}
+$$
 
 dengan `R` adalah rain rate dalam mm/h. Simulasi ini tidak punya input rain rate, jadi dipakai profil `weather` yang langsung memberi redaman per kilometer dan noise.
 
 ### 9. Humidity Loss
 
-```text
-L_humidity = d_km * max(0, (humidity_pct - 50) / 50) * 0.003
-```
+$$
+L_{\mathrm{humidity}} =
+d_{km}\max\left(0,\frac{H-50}{50}\right)0.003
+$$
 
 Efek ini kecil, tetapi tetap dimasukkan agar kelembapan ekstrem bisa mempengaruhi link budget.
 
 ### 10. Temperature Noise
 
-```text
-if temperature_c < 0:
-    temp_noise_db = min(1.5, abs(temperature_c) * 0.05)
-elif temperature_c > 40:
-    temp_noise_db = min(1.0, (temperature_c - 40) * 0.03)
-else:
-    temp_noise_db = 0
-```
+$$
+N_T =
+\begin{cases}
+\min(1.5,\ 0.05|T|), & T < 0^\circ C \\
+\min(1.0,\ 0.03(T-40)), & T > 40^\circ C \\
+0, & 0^\circ C \le T \le 40^\circ C
+\end{cases}
+$$
 
 Ini adalah model sederhana untuk menggambarkan perubahan noise/efisiensi perangkat pada temperatur ekstrem.
 
 ### 11. Link Budget Total
 
-```text
-rx_dbm =
-    Pt
-    + Gt + Gr
-    - FSPL_dB
-    - L_obstacle
-    - L_shadow
-    - L_diffraction
-    - L_terrain
-    - L_weather
-    - temp_noise_db
-    - L_humidity
-    - L_fading
-```
+$$
+\begin{aligned}
+P_{rx} &=
+P_t + G_t + G_r
+- L_{\mathrm{FSPL}}
+- L_{\mathrm{obstacle}}
+- L_{\mathrm{shadow}}
+- L_{\mathrm{diffraction}} \\
+&\quad
+- L_{\mathrm{terrain}}
+- L_{\mathrm{weather}}
+- N_T
+- L_{\mathrm{humidity}}
+- L_{\mathrm{fading}}
+\end{aligned}
+$$
 
 Di kode:
 
-```text
-Gt = Gr = antenna_gain_db
-```
+$$
+G_t = G_r = G_{\mathrm{antenna}}
+$$
 
 ### 12. Thermal Noise, SNR, dan Margin
 
 Thermal noise floor:
 
-```text
-N_dBm = -174 + 10 log10(BW_Hz) + NF
-```
+$$
+N_{\mathrm{dBm}} = -174 + 10\log_{10}(BW_{\mathrm{Hz}}) + NF
+$$
 
 Default kode:
 
-```text
-BW = 125000 Hz
-NF = 6 dB
-N_dBm ≈ -117 dBm
-```
+$$
+BW = 125000\ \mathrm{Hz},\quad NF = 6\ \mathrm{dB},\quad
+N_{\mathrm{dBm}} \approx -117\ \mathrm{dBm}
+$$
 
 SNR dan margin:
 
-```text
-SNR_dB = rx_dbm - N_dBm
-margin_db = rx_dbm - receiver_sensitivity_dbm(SF)
-```
+$$
+\begin{aligned}
+SNR_{\mathrm{dB}} &= P_{rx} - N_{\mathrm{dBm}} \\
+M_{\mathrm{link}} &= P_{rx} - S_{\mathrm{rx}}(SF)
+\end{aligned}
+$$
 
 ### 13. Fading Rayleigh
 
 Dipakai saat link NLOS, yaitu ketika ada obstacle loss atau terrain shadow.
 
-```text
-sigma = 1 / sqrt(2)
-I ~ N(0, sigma)
-Q ~ N(0, sigma)
-A = sqrt(I^2 + Q^2)
-L_fading = -20 log10(max(A, 1e-10))
-```
+$$
+\begin{aligned}
+\sigma &= \frac{1}{\sqrt{2}} \\
+I &\sim \mathcal{N}(0,\sigma) \\
+Q &\sim \mathcal{N}(0,\sigma) \\
+A &= \sqrt{I^2+Q^2} \\
+L_{\mathrm{fading}} &= -20\log_{10}(\max(A,\ 10^{-10}))
+\end{aligned}
+$$
 
 Rayleigh merepresentasikan multipath tanpa komponen LOS dominan.
 
@@ -308,23 +335,25 @@ Rayleigh merepresentasikan multipath tanpa komponen LOS dominan.
 
 Dipakai saat link LOS bersih.
 
-```text
-K = 10^(rician_k_db / 10)
-mu = sqrt(K / (K + 1))
-sigma = 1 / sqrt(2 * (K + 1))
-I ~ N(mu, sigma)
-Q ~ N(0, sigma)
-A = sqrt(I^2 + Q^2)
-L_fading = -20 log10(max(A, 1e-10))
-```
+$$
+\begin{aligned}
+K &= 10^{K_{\mathrm{dB}}/10} \\
+\mu &= \sqrt{\frac{K}{K+1}} \\
+\sigma &= \frac{1}{\sqrt{2(K+1)}} \\
+I &\sim \mathcal{N}(\mu,\sigma) \\
+Q &\sim \mathcal{N}(0,\sigma) \\
+A &= \sqrt{I^2+Q^2} \\
+L_{\mathrm{fading}} &= -20\log_{10}(\max(A,\ 10^{-10}))
+\end{aligned}
+$$
 
 Rician merepresentasikan multipath dengan satu komponen LOS dominan.
 
 ### 15. Sensitivitas Receiver Berdasarkan Spreading Factor
 
-```text
-receiver_sensitivity_dbm = table_sensitivity[SF]
-```
+$$
+S_{\mathrm{rx}} = S_{\mathrm{table}}(SF)
+$$
 
 | SF | Sensitivitas dBm |
 |---:|---:|
@@ -341,128 +370,159 @@ Semakin besar SF, sensitivitas makin baik, tetapi Time on Air makin panjang.
 
 Simulasi memakai BW 125 kHz, coding rate 4/5, explicit header, payload default 20 byte.
 
-```text
-T_sym = 2^SF / BW
-T_preamble = (8 + 4.25) * T_sym
-N_payload = max(8, ceil((8 * payload_bytes - 4 * SF + 28 + 16) / (4 * SF)) * 5)
-T_payload = N_payload * T_sym
-T_on_air = T_preamble + T_payload
-```
+$$
+\begin{aligned}
+T_{\mathrm{sym}} &= \frac{2^{SF}}{BW} \\
+T_{\mathrm{preamble}} &= (8+4.25)T_{\mathrm{sym}} \\
+N_{\mathrm{payload}} &=
+\max\left(8,\ \left\lceil
+\frac{8PL - 4SF + 28 + 16}{4SF}
+\right\rceil 5\right) \\
+T_{\mathrm{payload}} &= N_{\mathrm{payload}}T_{\mathrm{sym}} \\
+T_{\mathrm{onair}} &= T_{\mathrm{preamble}} + T_{\mathrm{payload}}
+\end{aligned}
+$$
 
 Kode menyimpan Time on Air dalam milidetik.
 
 ### 17. Packet Error Rate
 
-```text
-PER = 1 / (1 + exp(0.8 * (margin_db - 2.0)))
-```
+$$
+PER = \frac{1}{1+\exp(0.8(M_{\mathrm{link}}-2.0))}
+$$
 
 Makna praktis:
 
-```text
-margin rendah  -> PER tinggi
-margin tinggi  -> PER rendah
-```
+$$
+M_{\mathrm{link}}\downarrow \Rightarrow PER\uparrow,\qquad
+M_{\mathrm{link}}\uparrow \Rightarrow PER\downarrow
+$$
 
 Drop paket:
 
-```text
-per_drop = random() < PER
-```
+$$
+P_{\mathrm{PER\ drop}} = PER
+$$
 
 ### 18. Duty Cycle
 
 Kode memakai batas 1 persen per 1 jam:
 
-```text
-duty_used = sum(T_on_air_s dalam 3600 detik terakhir) / 3600
-duty_allowed = duty_used <= 0.01
-```
+$$
+D_{\mathrm{used}} =
+\frac{\sum T_{\mathrm{onair},s}\ \text{dalam 3600 s terakhir}}{3600}
+$$
+
+$$
+\mathrm{duty\ allowed} =
+\begin{cases}
+1, & D_{\mathrm{used}} \le 0.01 \\
+0, & D_{\mathrm{used}} > 0.01
+\end{cases}
+$$
 
 Jika tidak allowed:
 
-```text
-drop_reason = "duty_cycle"
-```
+$$
+D_{\mathrm{used}} > 0.01 \Rightarrow \mathrm{drop\ reason}=\text{duty\_cycle}
+$$
 
 ### 19. Channel Collision
 
-```text
-p_collision = base_collision_prob * n_nodes * T_on_air_s
-```
+$$
+p_{\mathrm{collision}} =
+p_{\mathrm{base}}N_{\mathrm{nodes}}T_{\mathrm{onair},s}
+$$
 
 Default:
 
-```text
-base_collision_prob = 0.005
-n_nodes = jumlah relay + hiker
-```
+$$
+p_{\mathrm{base}}=0.005,\qquad
+N_{\mathrm{nodes}}=N_{\mathrm{relay}}+1
+$$
 
 Drop collision:
 
-```text
-collision_drop = random() < p_collision
-```
+$$
+P_{\mathrm{collision\ drop}} = p_{\mathrm{collision}}
+$$
 
 ### 20. CRC, Hop Count, TTL, dan Protokol Paket
 
 CRC error probability:
 
-```text
-p_crc_error = max(0.005, PER * 0.1)
-crc_valid = random() > p_crc_error
-```
+$$
+p_{\mathrm{CRC}} = \max(0.005,\ 0.1PER)
+$$
+
+$$
+P(\mathrm{CRC\ valid}) = 1 - p_{\mathrm{CRC}}
+$$
 
 Hop count:
 
-```text
-hop_count = len(route) - 1
-hop_count_exceeded = hop_count > 6
-```
+$$
+H = \lvert \mathrm{route}\rvert - 1
+$$
+
+$$
+\mathrm{hop\ exceeded} =
+\begin{cases}
+1, & H > 6 \\
+0, & H \le 6
+\end{cases}
+$$
 
 Header overhead:
 
-```text
-header_bytes = 13 + hop_count * 2
-```
+$$
+B_{\mathrm{header}} = 13 + 2H
+$$
 
 Paket dibuang jika:
 
-```text
-packet_discarded =
-    hop_count_exceeded
-    or ttl_expired
-    or (delivered and not crc_valid)
-```
+$$
+\mathrm{discarded} =
+\mathrm{hop\ exceeded}
+\lor \mathrm{TTL\ expired}
+\lor (\mathrm{delivered}\land \neg\mathrm{CRC\ valid})
+$$
 
 ### 21. GPS TTFF Cold Start
 
-```text
-if elapsed_time < ttff_delay_s:
-    GPS status = STATUS_NO_FIX
-else:
-    GPS status = STATUS_FIX
-```
+$$
+\mathrm{GPS\ status} =
+\begin{cases}
+\mathrm{NO\_FIX}, & t < T_{\mathrm{TTFF}} \\
+\mathrm{FIX}, & t \ge T_{\mathrm{TTFF}}
+\end{cases}
+$$
 
 Default:
 
-```text
-ttff_delay_s = 8.0
-```
+$$
+T_{\mathrm{TTFF}} = 8.0\ \mathrm{s}
+$$
 
 ### 22. GPS DOP Area Hutan dan Terrain
 
 Jika pendaki berada di dalam obstacle:
 
-```text
-depth_frac = 1 - distance_to_center / obstacle_radius
-```
+$$
+F_{\mathrm{depth,GPS}} =
+1 - \frac{d_{\mathrm{center}}}{r_{\mathrm{obstacle}}}
+$$
 
 DOP:
 
-```text
-DOP = min(4.5, 1.0 + sum(depth_frac * k_kind))
-```
+$$
+DOP =
+\min\left(
+4.5,\ 
+1.0 + \sum_{j=1}^{N_{\mathrm{obs}}}
+F_{\mathrm{depth},j}K_{\mathrm{kind},j}
+\right)
+$$
 
 Koefisien:
 
@@ -477,34 +537,45 @@ Koefisien:
 
 Multipath dihitung untuk `rocks` dan `terrain` di sekitar pendaki:
 
-```text
-if distance < 1.5 * obstacle_radius:
-    proximity = max(0, 1 - distance / (1.5 * obstacle_radius))
-    multipath_m += proximity * gps_noise_std_m * 2.5
-```
+$$
+P_j =
+\max\left(0,\ 1-\frac{d_j}{1.5r_j}\right)
+$$
+
+$$
+M_{\mathrm{multipath}} =
+\sum_{j\in\{\mathrm{rocks,terrain}\}}
+P_j \cdot \sigma_{\mathrm{GPS}} \cdot 2.5
+$$
 
 ### 24. GPS Noise Total
 
-```text
-effective_noise_m = gps_noise_std_m * DOP + multipath_m
+$$
+\sigma_{\mathrm{eff}} = \sigma_{\mathrm{GPS}}DOP + M_{\mathrm{multipath}}
+$$
 
-noise_east  ~ N(0, effective_noise_m)
-noise_north ~ N(0, effective_noise_m)
-noise_alt   ~ N(0, effective_noise_m * 0.5)
-```
+$$
+\begin{aligned}
+e_{\mathrm{east}} &\sim \mathcal{N}(0,\sigma_{\mathrm{eff}}) \\
+e_{\mathrm{north}} &\sim \mathcal{N}(0,\sigma_{\mathrm{eff}}) \\
+e_{\mathrm{alt}} &\sim \mathcal{N}(0,0.5\sigma_{\mathrm{eff}})
+\end{aligned}
+$$
 
 Konversi ke koordinat lokal:
 
-```text
-noisy_x = x + noise_east / S
-noisy_y = y + noise_north / S
-```
+$$
+\begin{aligned}
+x_{\mathrm{GPS}} &= x + \frac{e_{\mathrm{east}}}{S} \\
+y_{\mathrm{GPS}} &= y + \frac{e_{\mathrm{north}}}{S}
+\end{aligned}
+$$
 
 ### 25. Kecepatan Pendaki karena Cuaca
 
-```text
-effective_speed = base_speed * weather_speed_factor
-```
+$$
+v_{\mathrm{eff}} = v_{\mathrm{base}}F_{\mathrm{weather}}
+$$
 
 | Cuaca | speed_factor |
 |---|---:|
@@ -516,66 +587,86 @@ effective_speed = base_speed * weather_speed_factor
 
 Saat low-power mode:
 
-```text
-effective_speed = effective_speed * 0.85
-```
+$$
+v_{\mathrm{eff,lowpower}} = 0.85v_{\mathrm{eff}}
+$$
 
 ### 26. Hardware Delay dan Clock Drift
 
 Hardware delay:
 
-```text
-sensor_read_delay_ms  ~ Uniform(10, 50)
-processing_delay_ms   ~ Uniform(30, 150)
-packet_prep_delay_ms  ~ Uniform(5, 30)
-hw_delay_ms = sensor_read_delay_ms + processing_delay_ms + packet_prep_delay_ms
-```
+$$
+\begin{aligned}
+\tau_{\mathrm{sensor}} &\sim U(10,50)\ \mathrm{ms} \\
+\tau_{\mathrm{process}} &\sim U(30,150)\ \mathrm{ms} \\
+\tau_{\mathrm{prep}} &\sim U(5,30)\ \mathrm{ms} \\
+\tau_{\mathrm{HW}} &= \tau_{\mathrm{sensor}}+\tau_{\mathrm{process}}+\tau_{\mathrm{prep}}
+\end{aligned}
+$$
 
 Clock drift:
 
-```text
-clock_drift_rate ~ N(0, 8e-5)
-clock_drift_s += clock_drift_rate * dt
-```
+$$
+\dot{\tau}_{\mathrm{drift}} \sim \mathcal{N}(0,\ 8\times10^{-5})
+$$
+
+$$
+\tau_{\mathrm{drift}}(t+\Delta t) =
+\tau_{\mathrm{drift}}(t) + \dot{\tau}_{\mathrm{drift}}\Delta t
+$$
 
 Watchdog restart:
 
-```text
-node_restarted = random() < 0.0001
-```
+$$
+P_{\mathrm{watchdog\ restart}} = 0.0001
+$$
 
 ### 27. Baterai dan Penurunan TX Power
 
 Konsumsi per tick:
 
-```text
-charge_tick_mah = (tx_current_ma * toa_s + idle_current_ma * idle_s) / 3600
-charge_used_mah += charge_tick_mah
-remaining_mah = battery_capacity_mah - charge_used_mah
-SoC = remaining_mah / battery_capacity_mah
-```
+$$
+\Delta Q_{\mathrm{mAh}} =
+\frac{I_{\mathrm{tx}}T_{\mathrm{onair},s}+I_{\mathrm{idle}}T_{\mathrm{idle},s}}{3600}
+$$
+
+$$
+\begin{aligned}
+Q_{\mathrm{used}}(t+\Delta t) &= Q_{\mathrm{used}}(t)+\Delta Q_{\mathrm{mAh}} \\
+Q_{\mathrm{remain}} &= Q_{\mathrm{capacity}}-Q_{\mathrm{used}} \\
+SoC &= \frac{Q_{\mathrm{remain}}}{Q_{\mathrm{capacity}}}
+\end{aligned}
+$$
 
 Tegangan model linear:
 
-```text
-voltage_v = 4.20 - (1 - SoC) * (4.20 - 3.00)
-```
+$$
+V = 4.20 - (1-SoC)(4.20-3.00)
+$$
 
 Penurunan TX power saat baterai di bawah 30 persen:
 
-```text
-if SoC < 0.30:
-    tx_reduction_db = (1 - SoC / 0.30) * 6.0
-    effective_tx_power_dbm = 17.0 - tx_reduction_db
-else:
-    effective_tx_power_dbm = 17.0
-```
+$$
+L_{\mathrm{battery}} =
+\begin{cases}
+\left(1-\frac{SoC}{0.30}\right)6.0, & SoC < 0.30 \\
+0, & SoC \ge 0.30
+\end{cases}
+$$
+
+$$
+P_{t,\mathrm{eff}} = 17.0 - L_{\mathrm{battery}}
+$$
 
 Low-power mode:
 
-```text
-low_power_mode = battery_percentage < 20
-```
+$$
+\mathrm{low\ power} =
+\begin{cases}
+1, & \mathrm{battery}_{\%} < 20 \\
+0, & \mathrm{battery}_{\%} \ge 20
+\end{cases}
+$$
 
 ## Error Radio LoRa
 
