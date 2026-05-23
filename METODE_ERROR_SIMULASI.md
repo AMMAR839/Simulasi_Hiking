@@ -270,18 +270,9 @@ Ini adalah model sederhana untuk menggambarkan perubahan noise/efisiensi perangk
 
 $$
 \begin{aligned}
-P_{rx} &=
-P_t + G_t + G_r
-- L_{\mathrm{FSPL}}
-- L_{\mathrm{obstacle}}
-- L_{\mathrm{shadow}}
-- L_{\mathrm{diffraction}} \\
-&\quad
-- L_{\mathrm{terrain}}
-- L_{\mathrm{weather}}
-- N_T
-- L_{\mathrm{humidity}}
-- L_{\mathrm{fading}}
+P_{rx} &= P_t + G_t + G_r \\
+&\quad {}- L_{\mathrm{FSPL}} - L_{\mathrm{obstacle}} - L_{\mathrm{shadow}} - L_{\mathrm{diffraction}} \\
+&\quad {}- L_{\mathrm{terrain}} - L_{\mathrm{weather}} - N_T - L_{\mathrm{humidity}} - L_{\mathrm{fading}}
 \end{aligned}
 $$
 
