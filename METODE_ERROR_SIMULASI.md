@@ -69,7 +69,7 @@ $$
 \begin{aligned}
 \vec{AB} &= (b_x-a_x,\ b_y-a_y) \\
 \vec{AC} &= (c_x-a_x,\ c_y-a_y) \\
-t &= \operatorname{clamp}\left(\frac{\vec{AC}\cdot\vec{AB}}{\lVert \vec{AB}\rVert^2},\ 0,\ 1\right) \\
+t &= \mathrm{clamp}\left(\frac{\vec{AC}\cdot\vec{AB}}{\|\vec{AB}\|^2},\ 0,\ 1\right) \\
 P &= A + t\vec{AB} \\
 d_{\min} &= \sqrt{(p_x-c_x)^2 + (p_y-c_y)^2}
 \end{aligned}
@@ -410,7 +410,7 @@ Kode memakai batas 1 persen per 1 jam:
 
 $$
 D_{\mathrm{used}} =
-\frac{\sum T_{\mathrm{onair},s}\ \text{dalam 3600 s terakhir}}{3600}
+\frac{\sum_{3600s} T_{\mathrm{onair},s}}{3600}
 $$
 
 $$
@@ -424,7 +424,7 @@ $$
 Jika tidak allowed:
 
 $$
-D_{\mathrm{used}} > 0.01 \Rightarrow \mathrm{drop\ reason}=\text{duty\_cycle}
+D_{\mathrm{used}} > 0.01 \Rightarrow R_{\mathrm{drop}}=\mathrm{dutycycle}
 $$
 
 ### 19. Channel Collision
@@ -661,10 +661,10 @@ $$
 Low-power mode:
 
 $$
-\mathrm{low\ power} =
+LPM =
 \begin{cases}
-1, & \mathrm{battery}_{\%} < 20 \\
-0, & \mathrm{battery}_{\%} \ge 20
+1, & B_{\mathrm{pct}} < 20 \\
+0, & B_{\mathrm{pct}} \ge 20
 \end{cases}
 $$
 
