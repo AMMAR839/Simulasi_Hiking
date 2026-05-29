@@ -33,6 +33,7 @@ setup(
             "lora_network = hiking_lora_sim.lora_network:main",
             "base_station_display = hiking_lora_sim.base_station_display:main",
             "dashboard = hiking_lora_sim.dashboard_node:main",
+            "data_logger = hiking_lora_sim.data_logger_node:main",
         ],
     },
 )
