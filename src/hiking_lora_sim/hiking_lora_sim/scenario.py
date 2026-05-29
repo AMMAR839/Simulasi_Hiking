@@ -77,13 +77,20 @@ class RadioObstacle:
 BASE_STATION = Station("base_station", -106.0, -96.0, 0.0, "base")
 
 LORA_NODES: List[Station] = [
-    Station("node_basecamp_gate", -91.0, -78.0, 0.0, "relay"),
-    Station("node_valley_watch", -66.0, -23.0, 0.0, "relay"),
-    Station("node_forest_pass", -38.0, -23.0, 0.0, "relay"),
-    Station("node_ridge_mid", 4.0, -3.0, 0.0, "relay"),
-    Station("node_crater_edge", 54.0, 45.0, 0.0, "relay"),
-    Station("node_north_saddle", 70.0, 64.0, 0.0, "relay"),
-    Station("node_summit_view", 91.0, 81.0, 0.0, "relay"),
+    Station("node_basecamp_gate",  -91.0, -78.0, 0.0, "relay"),
+    Station("node_valley_watch",   -66.0, -23.0, 0.0, "relay"),
+    Station("node_forest_pass",    -38.0, -23.0, 0.0, "relay"),
+    Station("node_ridge_mid",        4.0,  -3.0, 0.0, "relay"),
+    Station("node_crater_edge",     54.0,  45.0, 0.0, "relay"),
+    # Relay tambahan di bahu gunung (45, 55):
+    # Puncak Gaussian (center 74,70) memblok LOS langsung antara
+    # node_crater_edge dan node_north_saddle (terrain 233 m di atas LOS).
+    # Node ini memiliki LOS bersih ke node_north_saddle dan link terjangkau
+    # ke node_crater_edge (margin +33 dB), sekaligus dekat waypoint
+    # valley_route (43,51) dan crater_route (42,63).
+    Station("node_upper_traverse",  45.0,  55.0, 0.0, "relay"),
+    Station("node_north_saddle",    70.0,  64.0, 0.0, "relay"),
+    Station("node_summit_view",     91.0,  81.0, 0.0, "relay"),
 ]
 
 RADIO_OBSTACLES: List[RadioObstacle] = [

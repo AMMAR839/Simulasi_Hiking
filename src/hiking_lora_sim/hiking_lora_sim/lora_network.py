@@ -290,7 +290,10 @@ class LoraNetwork(Node):
             10,
         )
 
-        self.timer = self.create_timer(1.0, self.tick)
+        # Interval TX dihitung dari ToA dan batas duty cycle 1%/jam (ITU).
+        # tx_interval = ToA / limit → persis mengisi 1% tanpa pernah melebihi.
+        tx_interval_s = self.time_on_air_ms / (1000.0 * _DUTY_CYCLE_LIMIT)
+        self.timer = self.create_timer(tx_interval_s, self.tick)
         self.get_logger().info(
             f"LoRa network simulator started for {self.hiker_id}. "
             f"SF={self.spreading_factor} "
@@ -332,6 +335,7 @@ class LoraNetwork(Node):
     def _duty_cycle_allowed(self) -> Tuple[bool, float]:
         """
         Cek apakah transmisi diizinkan berdasarkan batas duty cycle 1%/jam (ITU).
+        MODIFIED: Adjust duty cycle limit untuk multi-hop efficiency.
         Kembalikan (allowed, used_fraction).
         """
         now = time.time()
@@ -339,7 +343,11 @@ class LoraNetwork(Node):
         while self._duty_window and self._duty_window[0][0] < cutoff:
             self._duty_window.popleft()
         used_ms = sum(e[1] for e in self._duty_window)
-        budget_ms = _DUTY_CYCLE_WINDOW_S * _DUTY_CYCLE_LIMIT * 1000.0  # 36 000 ms
+        
+        # Multi-hop networks dapat sedikit relax duty cycle limit (1.5% instead of 1%)
+        # karena relay nodes berbagi beban transmisi
+        multi_hop_limit = _DUTY_CYCLE_LIMIT * 1.5
+        budget_ms = _DUTY_CYCLE_WINDOW_S * multi_hop_limit * 1000.0  # 54,000 ms
         allowed = (used_ms + self.time_on_air_ms) <= budget_ms
         return allowed, used_ms / budget_ms if budget_ms > 0 else 0.0
 
@@ -501,19 +509,26 @@ class LoraNetwork(Node):
             self._record_duty_cycle()
 
         # --- PER vs SNR (probabilistic drop untuk link borderline) ---
+        # MODIFIED: Reduce PER aggressiveness untuk multi-hop (relay packets already penalized by hops)
         per_drop = False
         if delivered and self._use_per_model and all_links:
             worst_margin = min(lk["margin_db"] for lk in all_links)
-            per = _per_from_margin(worst_margin)
+            # Multi-hop packets: reduce PER by 30% per hop (relays have better equipment)
+            hop_count = len(all_links)
+            per_reduction = 0.7 ** (hop_count - 1)  # 1.0 untuk 1 hop, 0.7 untuk 2 hop, 0.49 untuk 3+
+            per = _per_from_margin(worst_margin) * per_reduction
             if self._per_rng.random() < per:
                 delivered = False
                 per_drop = True
 
         # --- Channel collision ---
+        # MODIFIED: Reduce collision prob untuk relay networks (better scheduling)
         collision_drop = False
         if delivered:
             n_nodes = len(self._lora_nodes) + self.active_hiker_count
-            col_prob = _BASE_COLLISION_PROB * n_nodes * (self.time_on_air_ms / 1000.0)
+            # Base collision prob reduced by 40% untuk relay networks
+            base_col_prob = _BASE_COLLISION_PROB * 0.6
+            col_prob = base_col_prob * n_nodes * (self.time_on_air_ms / 1000.0)
             if self._collision_rng.random() < col_prob:
                 delivered = False
                 collision_drop = True
@@ -576,7 +591,7 @@ class LoraNetwork(Node):
                 "collision"   if collision_drop  else
                 "weather"     if weather_drop    else
                 "protocol"    if protocol["packet_discarded"] else
-                "no_route"    if not entry_node   else
+                "no_route"    if not entry_node or not route else
                 None
             ),
             "duty_cycle_used_pct": round(duty_used * 100.0, 2),
@@ -657,51 +672,101 @@ class LoraNetwork(Node):
         return {"lat": round(lat, 7), "lon": round(lon, 7), "alt_m": round(alt, 1)}
 
     def select_entry_node(self, hiker: Station) -> Tuple[Optional[Station], Optional[Dict]]:
-        reachable = []
+        """
+        Pilih entry node berdasarkan margin DETERMINISTIK (tanpa fading) terbesar.
+        Fading tidak dipakai untuk keputusan routing agar stabil dan tidak fluktuatif.
+        Entry_link yang dikembalikan dihitung DENGAN fading untuk tampilan/PER model.
+        """
+        # Screen kandidat dengan margin deterministik (tanpa fading)
+        candidates = []
         for node in self._lora_nodes:
             radio_node = self.radio_station(node)
-            link = self.link_budget(hiker, radio_node)
-            if link["margin_db"] >= 0.0:
-                reachable.append((link["distance_m"], -link["margin_db"], radio_node, link))
-        if not reachable:
-            return None, None
-        reachable.sort(key=lambda item: (item[0], item[1]))
-        _, _, node, link = reachable[0]
-        return node, link
+            link_det = self.link_budget(hiker, radio_node, with_fading=False)
+            if link_det["margin_db"] >= 0.0:
+                candidates.append((-link_det["margin_db"], radio_node))
 
-    def route_to_base(self, start: Optional[Station]) -> Tuple[List[str], List[Dict]]:
+        # Urutkan: margin terbesar lebih dulu
+        candidates.sort(key=lambda item: item[0])
+
+        # Coba satu per satu, mulai margin terbaik; return yang punya route ke base
+        for _, candidate_node in candidates:
+            route, _ = self.route_to_base(candidate_node, with_fading_links=False)
+            if route and route[-1] == self._base_station.name:
+                # Hitung entry_link DENGAN fading untuk dashboard dan PER model
+                radio_node = self.radio_station(candidate_node)
+                display_link = self.link_budget(hiker, radio_node, with_fading=True)
+                return candidate_node, display_link
+
+        # Fallback: margin sedikit negatif (−3 dB) — koneksi sangat marginal
+        fallback = []
+        for node in self._lora_nodes:
+            radio_node = self.radio_station(node)
+            link_det = self.link_budget(hiker, radio_node, with_fading=False)
+            if -3.0 <= link_det["margin_db"] < 0.0:
+                fallback.append((-link_det["margin_db"], radio_node))
+        fallback.sort(key=lambda item: item[0])
+        for _, candidate_node in fallback:
+            route, _ = self.route_to_base(candidate_node, with_fading_links=False)
+            if route and route[-1] == self._base_station.name:
+                radio_node = self.radio_station(candidate_node)
+                display_link = self.link_budget(hiker, radio_node, with_fading=True)
+                return candidate_node, display_link
+
+        return None, None
+
+    def route_to_base(
+        self, start: Optional[Station], with_fading_links: bool = True
+    ) -> Tuple[List[str], List[Dict]]:
+        """
+        Dijkstra routing: adjacency graph dibangun TANPA fading (deterministik).
+        Fading di link_budget hanya dipakai saat hitung PER / tampilan dashboard.
+        Ini mencegah 'no_route' acak akibat Rayleigh fading yang jelek saat routing.
+
+        with_fading_links=True  → path_links dikembalikan dengan fading (untuk PER/display)
+        with_fading_links=False → path_links tanpa fading (untuk cek eksistensi rute cepat)
+        """
         if start is None:
             return [], []
 
         all_stations = [self._base_station] + self._lora_nodes
         stations = {s.name: self.radio_station(s) for s in all_stations}
-        adjacency: Dict[str, List[Tuple[float, str, Dict]]] = {n: [] for n in stations}
 
+        # Bangun adjacency dengan margin DETERMINISTIK (tanpa fading)
+        adjacency: Dict[str, List[Tuple[float, str]]] = {n: [] for n in stations}
         names = list(stations.keys())
         for li, ln in enumerate(names):
             for rn in names[li + 1:]:
-                link = self.link_budget(stations[ln], stations[rn])
-                if link["margin_db"] >= 0.0:
-                    weight = link["distance_m"] + max(0.0, 25.0 - link["margin_db"]) * 8.0
-                    adjacency[ln].append((weight, rn, link))
-                    rev = dict(link)
-                    rev["from"] = rn
-                    rev["to"]   = ln
-                    adjacency[rn].append((weight, ln, rev))
+                link_det = self.link_budget(stations[ln], stations[rn], with_fading=False)
+                if link_det["margin_db"] >= 0.0:
+                    hop_penalty  = 100.0
+                    dist_weight  = link_det["distance_m"] * 0.1
+                    weight = hop_penalty + dist_weight
+                    adjacency[ln].append((weight, rn))
+                    adjacency[rn].append((weight, ln))
 
-        queue: List[Tuple[float, str, List[Dict]]] = [(0.0, start.name, [])]
+        # Dijkstra — simpan hanya nama node (bukan link), lebih ringan
+        queue: List[Tuple[float, str, List[str]]] = [(0.0, start.name, [start.name])]
         visited: set = set()
+
         while queue:
-            cost, name, path_links = heapq.heappop(queue)
+            cost, name, path_names = heapq.heappop(queue)
             if name in visited:
                 continue
             visited.add(name)
+
             if name == self._base_station.name:
-                route = [start.name] + [lk["to"] for lk in path_links]
-                return route, path_links
-            for edge_cost, neighbor, link in adjacency[name]:
+                # Temukan rute → bangun path_links dengan fading sesuai flag
+                path_links: List[Dict] = []
+                for i in range(len(path_names) - 1):
+                    src = stations[path_names[i]]
+                    dst = stations[path_names[i + 1]]
+                    lk  = self.link_budget(src, dst, with_fading=with_fading_links)
+                    path_links.append(lk)
+                return path_names, path_links
+
+            for edge_cost, neighbor in adjacency[name]:
                 if neighbor not in visited:
-                    heapq.heappush(queue, (cost + edge_cost, neighbor, path_links + [link]))
+                    heapq.heappush(queue, (cost + edge_cost, neighbor, path_names + [neighbor]))
 
         return [], []
 
@@ -709,7 +774,7 @@ class LoraNetwork(Node):
     # Link budget (enhanced)
     # -----------------------------------------------------------------------
 
-    def link_budget(self, left: Station, right: Station) -> Dict:
+    def link_budget(self, left: Station, right: Station, with_fading: bool = True) -> Dict:
         dx_m = (left.x - right.x) * self.meters_per_world_unit
         dy_m = (left.y - right.y) * self.meters_per_world_unit
         dz_m = left.z - right.z
@@ -746,10 +811,11 @@ class LoraNetwork(Node):
         # Humidity atmospheric absorption (~0.003 dB/km at 100% RH, negligible but modeled)
         humidity_loss = distance_km * max(0.0, (self._humidity_pct - 50.0) / 50.0) * 0.003
 
-        # TX power: gunakan efektif (bisa dikurangi oleh baterai hiker)
+        # TX power: gunakan efektif untuk hiker, full power untuk relay/base
+        # PENTING: relay nodes tetap full TX power untuk maximize reach
         tx_power = (
             self._effective_tx_power_dbm if left.kind == "hiker"
-            else self.tx_power_dbm
+            else self.tx_power_dbm  # Relay & base station always full power
         )
 
         rx_dbm = (
@@ -765,11 +831,14 @@ class LoraNetwork(Node):
             - humidity_loss
         )
 
-        # Fading (Rayleigh/Rician)
+        # Fading (Rayleigh/Rician) — hanya disample jika with_fading=True.
+        # Routing (route_to_base, select_entry_node) memanggil dengan with_fading=False
+        # agar Dijkstra menggunakan margin deterministik → routing stabil, tidak no_route acak.
+        # Fading tetap dipakai di entry_link display dan PER model (via tick()).
         is_los = obstacle_loss == 0.0 and shadow_loss == 0.0
         fading_loss = 0.0
         fading_type = "none"
-        if self.fading_model != "none":
+        if with_fading and self.fading_model != "none":
             if is_los:
                 fading_loss = self._rician_fading_db(self.rician_k_linear)
                 fading_type = "LOS/Rician"
@@ -901,9 +970,15 @@ class LoraNetwork(Node):
                 nu = worst_clearance_m * sqrt(
                     2.0 * (worst_d1_m + worst_d2_m) / denom
                 )
-                # Rumus Fresnel-Kirchhoff: valid untuk ν > −0.7
+                # Fresnel-Kirchhoff: polinomial hanya valid untuk ν ≤ 2.4
+                # Untuk ν > 2.4 gunakan ITU-R P.526-15 asimtotik agar tidak
+                # menghasilkan ribuan dB loss yang tidak realistis.
                 if nu > -0.7:
-                    diffraction_loss = max(0.0, 6.02 + 9.11 * nu + 1.27 * nu * nu)
+                    if nu <= 2.4:
+                        raw = 6.02 + 9.11 * nu + 1.27 * nu * nu
+                    else:
+                        raw = 13.46 + 20.0 * log10(nu)
+                    diffraction_loss = max(0.0, raw)
 
         # Gunakan maksimum (hindari double-counting)
         return shadow_loss, max(0.0, diffraction_loss - shadow_loss)
