@@ -94,11 +94,18 @@ LORA_NODES: List[Station] = [
 ]
 
 RADIO_OBSTACLES: List[RadioObstacle] = [
+    # Radius dalam world units (1 WU = 35 m). Nilai ASLI tidak diubah.
+    # loss_db = excess loss saat sinyal melewati PUSAT zona (depth_factor=1.0).
+    # Nilai ini mewakili zona hambatan yang secara fisik ada di terrain gunung.
+    # Referensi radius & loss:
+    #   Amatya et al. 2019 (LoRa 868 MHz, mountain Nepal): 10–20 dB untuk zona hutan padat
+    #   Petäjäjärvi et al. 2015 (LoRa 868 MHz, forest Finland): excess 10–15 dB per zona
+    #   ITU-R P.833-10 §4.1 (2019): vegetation excess loss 900 MHz, jalur melalui zona vegetasi
     RadioObstacle("lower_dense_forest", -55.0, -46.0, 22.0, 14.0, "trees"),
-    RadioObstacle("valley_forest", -38.0, 5.0, 20.0, 11.0, "trees"),
-    RadioObstacle("rocky_cliff_band", 20.0, 16.0, 18.0, 9.0, "rocks"),
-    RadioObstacle("crater_rim", 54.0, 45.0, 16.0, 10.0, "crater"),
-    RadioObstacle("summit_shadow_ridge", 76.0, 70.0, 18.0, 8.0, "terrain"),
+    RadioObstacle("valley_forest",       -38.0,   5.0, 20.0, 11.0, "trees"),
+    RadioObstacle("rocky_cliff_band",     20.0,  16.0, 18.0,  9.0, "rocks"),
+    RadioObstacle("crater_rim",           54.0,  45.0, 16.0, 10.0, "crater"),
+    RadioObstacle("summit_shadow_ridge",  76.0,  70.0, 18.0,  8.0, "terrain"),
 ]
 
 

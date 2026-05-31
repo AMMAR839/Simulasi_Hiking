@@ -53,6 +53,7 @@ _NET_FIELDS = [
     # Link RF terbaik / terburuk
     "distance_m", "rx_dbm", "snr_db", "margin_db",
     "obstacle_loss_db", "terrain_shadow_db", "diffraction_db",
+    "terrain_scatter_db",
     "fading_db", "fading_type", "weather_loss_db", "temp_noise_db",
     # LoRa parameter
     "spreading_factor", "data_rate_bps", "time_on_air_ms",
@@ -180,10 +181,11 @@ class DataLoggerNode(Node):
             "rx_dbm":           worst.get("rx_dbm", ""),
             "snr_db":           ev.get("snr_db", ""),
             "margin_db":        worst.get("margin_db", ""),
-            "obstacle_loss_db": worst.get("obstacle_loss_db", ""),
+            "obstacle_loss_db":  worst.get("obstacle_loss_db", ""),
             "terrain_shadow_db": worst.get("terrain_shadow_loss_db", ""),
-            "diffraction_db":   worst.get("diffraction_loss_db", ""),
-            "fading_db":        worst.get("fading_loss_db", ""),
+            "diffraction_db":    worst.get("diffraction_loss_db", ""),
+            "terrain_scatter_db": worst.get("terrain_loss_db", ""),
+            "fading_db":         worst.get("fading_loss_db", ""),
             "fading_type":      worst.get("fading_type", ""),
             "weather_loss_db":  worst.get("weather_loss_db", ""),
             "temp_noise_db":    worst.get("temp_noise_db", ""),
