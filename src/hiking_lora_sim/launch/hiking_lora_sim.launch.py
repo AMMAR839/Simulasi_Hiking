@@ -582,7 +582,7 @@ def generate_launch_description():
             # EByte E220-900T22D: TX max 22 dBm (Ref: EByte datasheet v1.0)
             DeclareLaunchArgument("tx_power_dbm", default_value="22.0"),
             # Antena SMA 3 dBi (hardware proyek)
-            DeclareLaunchArgument("antenna_gain_db", default_value="3.0"),
+            DeclareLaunchArgument("antenna_gain_db", default_value="5.0"),
             # Terrain scatter (ITU-R P.452 rural sub-GHz: 0.5–1.5 dB/km)
             DeclareLaunchArgument("terrain_loss_db_per_km", default_value="1.0"),
             # SF tunggal (default). Gunakan spreading_factors untuk multi-SF per hiker.

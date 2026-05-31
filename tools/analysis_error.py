@@ -2,9 +2,9 @@
 Analisis error simulasi Hiking LoRa — skrip STANDALONE (tidak butuh ROS).
 
 Hardware referensi proyek:
-  - LoRa  : EByte E220-900T22D (LLCC68), TX max 22 dBm, f=915 MHz
+  - LoRa  : EByte E220-900T22D (LLCC68), TX max 22 dBm, f=923 MHz
              Ref: EByte E220-900T22D Datasheet v1.0, 2021
-  - Antena: SMA female 3 dBi (portable node & relay node)
+  - Antena: SMA female 5 dBi (portable node & relay node)
   - GPS   : u-blox NEO-6M V2 (GY-GPS6MV2), CEP 2.5 m (open-sky)
              Ref: u-blox NEO-6M Product Summary, UBX-09003295-R08
 
@@ -26,15 +26,15 @@ from collections import defaultdict
 REF_LAT               = -6.89148    # reference_lat (hiker_agent & scenario.py)
 REF_LON               = 107.61066   # reference_lon
 METERS_PER_WORLD_UNIT = 35.0        # meters_per_world_unit (scenario.py DEFAULT)
-FREQ_MHZ              = 915.0       # frekuensi operasi LoRa (E220-900T22D: 850-930 MHz)
+FREQ_MHZ              = 923.0       # frekuensi operasi LoRa (E220-900T22D: 923 MHz, regulasi Indonesia)
 
 # EByte E220-900T22D: TX power maksimum 22 dBm (Ref: EByte datasheet §3.1)
 TX_POWER_DBM          = 22.0
 
-# Antena SMA female 3 dBi (spesifikasi komponen user)
-# Kedua ujung link (TX dan RX) menggunakan antena yang sama → gain total = 2 × 3 = 6 dBi
+# Antena SMA female 5 dBi (spesifikasi komponen user)
+# Kedua ujung link (TX dan RX) menggunakan antena yang sama → gain total = 2 × 5 = 10 dBi
 # Ref: Friis transmission equation, IEEE Std 149-2021
-ANTENNA_GAIN_DB       = 3.0
+ANTENNA_GAIN_DB       = 5.0
 
 # Path loss exponent (n) untuk terrain pegunungan — log-distance empirical model
 # Ref: Petäjäjärvi et al., "Evaluation of LoRa LPWAN Technology", ISWCS 2015 (n=2.7–3.5 rural)
@@ -302,7 +302,7 @@ def print_summary(m: dict) -> None:
     SEP2 = "-" * 70
     print(f"\n{SEP}")
     print("  LAPORAN EVALUASI ERROR — SIMULASI HIKING LoRa")
-    print(f"  Hardware: EByte E220-900T22D (22 dBm) + 3 dBi SMA | GPS: NEO-6M V2")
+    print(f"  Hardware: EByte E220-900T22D (22 dBm) + 5 dBi SMA | GPS: NEO-6M V2")
     print(SEP)
 
     # ── [1] GPS tick error ────────────────────────────────────────────────────
