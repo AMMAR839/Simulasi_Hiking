@@ -22,6 +22,16 @@ Pohon, batu, kawah, dan punggungan gunung tidak dihitung dari setiap mesh visual
 
 Bagian ini merangkum rumus yang dipakai oleh simulasi. Beberapa rumus adalah model standar, sementara beberapa lainnya adalah penyederhanaan heuristik agar mudah dipakai pada simulasi ROS 2/Gazebo.
 
+### Prinsip Penggunaan Referensi
+
+Tidak semua error pada simulasi harus memiliki satu jurnal khusus yang memberikan angka persis sama dengan nilai pada kode. Dalam simulasi ini, referensi digunakan dengan tiga tingkatan:
+
+1. **Model standar atau referensi kuat**, yaitu rumus yang memang umum dipakai pada komunikasi radio atau GPS, seperti free-space path loss, knife-edge diffraction, Rayleigh/Rician fading, LoRa Time on Air, dan duty cycle.
+2. **Model empiris atau semi-empiris**, yaitu metode yang konsepnya didukung literatur, tetapi nilai parameternya tetap perlu disesuaikan dengan skenario, seperti redaman vegetasi, hujan, GPS DOP, dan multipath.
+3. **Heuristik internal simulasi**, yaitu model sederhana yang dibuat agar fenomena sistem dapat direpresentasikan secara komputasional, misalnya obstacle loss untuk batu/kawah sebagai zona abstrak, packet error rate berbasis fungsi logistik, delay hardware, clock drift, watchdog restart, dan penurunan TX power akibat baterai.
+
+Dengan pembagian ini, simulasi tidak mengklaim bahwa semua angka adalah hasil pengukuran lapangan atau angka baku dari jurnal. Yang dipertanggungjawabkan adalah alur pemodelannya: setiap gangguan memiliki dasar fisik atau alasan teknis, sedangkan nilai parameter yang bersifat heuristik diposisikan sebagai asumsi simulasi yang dapat dikalibrasi pada pengujian lapangan.
+
 ### Notasi
 
 | Simbol | Arti |
@@ -188,13 +198,18 @@ $$
 \nu = h\sqrt{\frac{2(d_1+d_2)}{\lambda d_1d_2}}
 $$
 
-Loss knife-edge:
+Loss knife-edge dihitung dengan dua bentuk agar sesuai dengan implementasi saat ini. Untuk `nu` kecil sampai sedang, kode memakai bentuk polinomial:
 
 $$
-L_{\mathrm{ke}} = 6.02 + 9.11\nu + 1.27\nu^2
+L_{\mathrm{ke}} =
+\begin{cases}
+6.02 + 9.11\nu + 1.27\nu^2, & -0.7 < \nu \le 2.4 \\
+13.46 + 20\log_{10}(\nu), & \nu > 2.4 \\
+0, & \nu \le -0.7
+\end{cases}
 $$
 
-Kode memakai difraksi hanya jika `nu > -0.7`, lalu menghindari double-counting dengan shadow loss:
+Pembatasan ini penting karena bentuk polinomial dapat menghasilkan nilai ribuan dB jika digunakan pada `nu` yang sangat besar. Untuk kondisi terrain yang sangat menghalangi lintasan radio, kode memakai bentuk asimtotik/logaritmik agar nilai diffraction loss tetap dapat dipakai sebagai indikator NLOS berat tanpa menjadi angka redaman yang tidak realistis. Kode kemudian menghindari double-counting dengan shadow loss:
 
 $$
 L_{\mathrm{diffraction}} = \max(0,\ L_{\mathrm{ke}} - L_{\mathrm{shadow}})
@@ -392,12 +407,33 @@ $$
 Drop paket:
 
 $$
-P_{\mathrm{PER\ drop}} = PER
+P_{\mathrm{PER\ drop}} = PER \cdot 0.7^{H_{\mathrm{link}}-1}
 $$
+
+`H_link` adalah jumlah link pada route aktif. Faktor `0.7^(H_link-1)` digunakan pada implementasi saat ini untuk mengurangi agresivitas PER pada route multi-hop. Asumsinya, relay node memiliki posisi antena dan kestabilan perangkat yang lebih baik daripada portable node, sehingga paket multi-hop tidak langsung dihukum terlalu berat hanya karena jumlah hop bertambah. Faktor ini adalah heuristik simulasi dan dapat dikalibrasi ulang saat pengujian lapangan.
 
 ### 18. Duty Cycle
 
-Kode memakai batas 1 persen per 1 jam:
+Kode memakai dasar batas duty cycle 1 persen per 1 jam. Interval pengiriman LoRa juga disesuaikan dari Time on Air agar node tidak mengirim terlalu rapat:
+
+$$
+T_{\mathrm{interval}} =
+\frac{T_{\mathrm{onair}}}{D_{\mathrm{limit}}}
+$$
+
+dengan:
+
+$$
+D_{\mathrm{limit}} = 0.01
+$$
+
+Untuk pengecekan rolling window, implementasi saat ini memberi relaksasi internal untuk skenario multi-hop:
+
+$$
+D_{\mathrm{limit,mh}} = 1.5D_{\mathrm{limit}} = 0.015
+$$
+
+Relaksasi ini adalah asumsi simulasi agar relay multi-hop yang berbagi beban transmisi tidak terlalu cepat masuk kondisi `duty_cycle`. Jika digunakan untuk pembahasan regulasi, nilai acuan yang tetap perlu disebut adalah 1 persen.
 
 $$
 D_{\mathrm{used}} =
@@ -407,29 +443,30 @@ $$
 $$
 \mathrm{duty\ allowed} =
 \begin{cases}
-1, & D_{\mathrm{used}} \le 0.01 \\
-0, & D_{\mathrm{used}} > 0.01
+1, & D_{\mathrm{used}} \le D_{\mathrm{limit,mh}} \\
+0, & D_{\mathrm{used}} > D_{\mathrm{limit,mh}}
 \end{cases}
 $$
 
 Jika tidak allowed:
 
 $$
-D_{\mathrm{used}} > 0.01 \Rightarrow R_{\mathrm{drop}}=\mathrm{dutycycle}
+D_{\mathrm{used}} > D_{\mathrm{limit,mh}} \Rightarrow R_{\mathrm{drop}}=\mathrm{dutycycle}
 $$
 
 ### 19. Channel Collision
 
 $$
 p_{\mathrm{collision}} =
-p_{\mathrm{base}}N_{\mathrm{nodes}}T_{\mathrm{onair},s}
+p_{\mathrm{base,eff}}N_{\mathrm{nodes}}T_{\mathrm{onair},s}
 $$
 
 Default:
 
 $$
 p_{\mathrm{base}}=0.005,\qquad
-N_{\mathrm{nodes}}=N_{\mathrm{relay}}+1
+p_{\mathrm{base,eff}}=0.6p_{\mathrm{base}},\qquad
+N_{\mathrm{nodes}}=N_{\mathrm{relay}}+N_{\mathrm{hiker\ aktif}}
 $$
 
 Drop collision:
@@ -733,6 +770,23 @@ Metodenya:
 3. Hitung diffraction loss.
 4. Untuk menghindari double-counting, hasil akhir memakai tambahan difraksi di atas shadow loss.
 
+Rumus yang digunakan pada implementasi saat ini dibuat bertingkat:
+
+```text
+jika -0.7 < nu <= 2.4:
+  diffraction_raw = 6.02 + 9.11 * nu + 1.27 * nu^2
+
+jika nu > 2.4:
+  diffraction_raw = 13.46 + 20 log10(nu)
+
+jika nu <= -0.7:
+  diffraction_raw = 0
+
+diffraction_loss_db = max(0, diffraction_raw - shadow_loss_db)
+```
+
+Bagian polinomial dipakai untuk kondisi halangan kecil sampai sedang. Untuk `nu` yang besar, simulasi memakai bentuk logaritmik agar nilai diffraction loss tidak meledak menjadi sangat besar. Ini penting karena pada terrain pegunungan, beda tinggi antara terrain dan garis LOS bisa besar; jika seluruh kondisi dipaksa memakai polinomial, hasilnya dapat menjadi ribuan dB dan tidak lagi berguna sebagai model simulasi.
+
 ### 5. Terrain Scatter Loss
 
 Selain terrain yang memblokir LOS, ada loss tambahan berbasis jarak:
@@ -794,7 +848,26 @@ Simulasi memilih jenis fading berdasarkan kondisi link:
 
 Rician dipakai untuk link yang masih punya komponen LOS kuat. Rayleigh dipakai untuk link yang lebih banyak pantulan dan tidak punya LOS bersih.
 
-### 9. Receiver Sensitivity dan Spreading Factor
+### 9. Routing Multi-Hop Deterministik
+
+Routing pada versi simulasi sekarang dibuat lebih stabil dengan memisahkan dua jenis perhitungan link budget:
+
+1. Link budget deterministik, yaitu perhitungan tanpa fading acak.
+2. Link budget aktual, yaitu perhitungan dengan fading acak untuk evaluasi paket.
+
+Pemilihan relay masuk (`entry_node`) dilakukan dari posisi hiker ke semua relay. Relay hanya dipilih jika margin deterministik hiker-ke-relay masih layak dan relay tersebut memiliki route menuju base station. Route antar relay dihitung menggunakan graph Dijkstra yang berisi base station dan seluruh relay node. Edge antar node hanya dibuat jika margin deterministik antar relay bernilai minimal 0 dB.
+
+Bobot graph yang digunakan:
+
+```text
+cost = 100 + 0.1 * distance_m
+```
+
+Nilai 100 menjadi penalti per hop agar route tidak memakai terlalu banyak relay jika tidak perlu. Komponen jarak dipakai untuk memilih link yang lebih pendek ketika jumlah hop sama. Dengan cara ini, route tidak mudah berubah hanya karena fading sesaat. Fading tetap dihitung setelah route dipilih, lalu dipakai untuk RSSI aktual, margin aktual, SNR, dan peluang paket gagal.
+
+Pada kondisi tertentu, simulasi memberi fallback untuk link hiker-ke-entry relay dengan margin antara -3 dB sampai 0 dB. Fallback ini hanya berlaku pada link pertama dari hiker ke relay, bukan pada seluruh link relay-to-relay. Tujuannya agar hiker yang berada di batas cakupan masih dapat diuji sebagai kondisi marginal, tetapi backbone antar relay tetap dipilih dari link yang lebih stabil.
+
+### 10. Receiver Sensitivity dan Spreading Factor
 
 Spreading Factor mengubah sensitivitas receiver dan Time on Air.
 
@@ -815,7 +888,7 @@ margin_db = rx_dbm - receiver_sensitivity_dbm
 
 Jika margin kecil, peluang error paket naik.
 
-### 10. Packet Error Rate
+### 11. Packet Error Rate
 
 PER dihitung dari margin memakai fungsi logistik:
 
@@ -829,9 +902,17 @@ Maknanya:
 - Margin sekitar 6 dB: peluang error jauh lebih kecil.
 - Margin sekitar 10 dB: peluang error rendah.
 
+Pada route multi-hop, implementasi saat ini mengurangi agresivitas PER dengan faktor:
+
+```text
+PER_drop = PER * 0.7^(hop_count - 1)
+```
+
+Faktor ini adalah heuristik simulasi. Alasannya, relay node diasumsikan memiliki posisi antena dan pemasangan yang lebih stabil dibanding portable node, sehingga route multi-hop tidak langsung dihukum terlalu berat hanya karena jumlah hop bertambah. Untuk laporan, bagian yang kuat secara teori adalah hubungan margin terhadap peluang error; faktor `0.7^(hop_count - 1)` perlu disebut sebagai asumsi simulasi yang dapat dikalibrasi pada pengujian lapangan.
+
 Jika random number lebih kecil dari PER, paket dianggap drop dengan alasan `per_model`.
 
-### 11. Duty Cycle
+### 12. Duty Cycle
 
 Simulasi membatasi penggunaan kanal LoRa:
 
@@ -839,19 +920,32 @@ Simulasi membatasi penggunaan kanal LoRa:
 duty_cycle_limit = 1 persen per 3600 detik
 ```
 
-Time on Air setiap paket dicatat. Jika penggunaan kanal melebihi batas, paket berikutnya bisa drop dengan alasan `duty_cycle`.
+Interval pengiriman paket LoRa juga dihitung dari Time on Air:
 
-### 12. Channel Collision
+```text
+tx_interval_s = time_on_air_s / duty_cycle_limit
+```
+
+Dengan batas 1 persen, paket SF9 dengan Time on Air sekitar 153 ms menghasilkan interval kirim sekitar 15,3 detik. Time on Air setiap paket tetap dicatat dalam rolling window satu jam. Pada implementasi multi-hop saat ini, budget internal untuk relay dibuat sedikit lebih longgar:
+
+```text
+multi_hop_limit = 1.5 * duty_cycle_limit
+```
+
+Artinya batas internal simulasi menjadi 1,5 persen untuk menghindari relay terlalu cepat selalu gagal `duty_cycle` saat menerima beban dari banyak hiker. Ini bukan klaim regulasi baru. Untuk pembahasan regulasi, angka yang aman tetap 1 persen; angka 1,5 persen adalah asumsi simulasi agar skenario multi-hop dapat diamati.
+
+### 13. Channel Collision
 
 Collision dimodelkan sebagai probabilitas:
 
 ```text
-collision_prob = base_collision_prob * jumlah_node * time_on_air_s
+collision_prob = base_collision_prob_eff * jumlah_node * time_on_air_s
+base_collision_prob_eff = 0.6 * base_collision_prob
 ```
 
-Default `base_collision_prob` adalah 0.005. Semakin banyak node dan semakin lama Time on Air, peluang collision semakin tinggi.
+Default `base_collision_prob` adalah 0.005, sehingga probabilitas efektif yang dipakai adalah 0.003. `jumlah_node` dihitung dari jumlah relay aktif ditambah jumlah hiker aktif. Semakin banyak hiker yang mengirim paket dan semakin lama Time on Air, peluang collision semakin tinggi.
 
-### 13. Packet Protocol
+### 14. Packet Protocol
 
 Simulasi juga memberi error protokol:
 
@@ -1028,30 +1122,33 @@ Model ini cukup untuk simulasi teknis dan laporan konsep, tetapi ada batasan:
 
 Dengan batasan tersebut, simulasi ini tetap bisa dipertanggungjawabkan sebagai simulasi berbasis link budget dan model probabilistik, selama dijelaskan bahwa obstacle dan cuaca adalah representasi matematis, bukan pengukuran fisik langsung.
 
+Poin penting untuk laporan: metode error tidak harus seluruhnya berasal dari satu jurnal yang memberikan angka identik dengan kode. Untuk Capstone 1, yang perlu ditunjukkan adalah bahwa gangguan utama memiliki dasar teknis, rumus yang standar digunakan ketika tersedia, dan parameter yang belum memiliki data lapangan dinyatakan sebagai asumsi simulasi. Pada Capstone 2, parameter heuristik seperti loss batu/kawah, wet factor, PER logistik, delay hardware, dan penurunan TX power dapat dikalibrasi menggunakan data pengujian perangkat fisik.
+
 ## Peta Metode ke Referensi/Jurnal
 
-Tabel ini menunjukkan rujukan untuk tiap kelompok metode. Jika kolom rujukan berisi "heuristik internal", artinya rumus itu dibuat sebagai pendekatan simulasi sederhana di kode, bukan klaim model standar penuh dari jurnal tertentu.
+Tabel ini menunjukkan posisi setiap metode terhadap referensi. Kolom "Status" membedakan apakah metode tersebut memakai rumus standar, model empiris, atau heuristik internal. Jika statusnya heuristik internal, artinya model tersebut tidak diklaim sebagai rumus baku dari jurnal tertentu, tetapi digunakan sebagai pendekatan komputasional agar simulasi dapat menghasilkan perilaku yang bisa dianalisis.
 
-| Metode | Dipakai untuk | Rujukan |
-|---|---|---|
-| Free-space path loss | Redaman dasar jarak radio | [R1] |
-| Obstacle `trees` / vegetasi | Redaman hutan dan daun basah | [R2] |
-| Obstacle `rocks`, `crater`, `terrain` | Redaman zona batu/kawah/ridge berbasis kedalaman lintasan | Heuristik internal, terinspirasi link-budget obstruction loss |
-| Terrain shadow | Sampel terrain yang menutup LOS/Fresnel clearance | [R3], heuristik internal |
-| Knife-edge diffraction | Redaman difraksi punggungan gunung | [R3] |
-| Rain/weather attenuation | Hujan/kabut/badai sebagai redaman dan noise | [R4], heuristik internal |
-| Humidity loss | Loss kecil akibat kelembapan | Heuristik internal |
-| Temperature noise | Noise perangkat pada temperatur ekstrem | Heuristik internal |
-| Rayleigh fading | Link NLOS/multipath tanpa LOS dominan | [R5] |
-| Rician fading | Link LOS dengan komponen dominan | [R5] |
-| LoRa sensitivity dan Time on Air | Efek SF, BW, CR, payload terhadap durasi dan sensitivitas | [R6], [R7] |
-| Duty cycle dan collision | Pembatasan kanal dan peluang tabrakan paket | [R7], [R8] |
-| Packet Error Rate | Drop probabilistik dari margin link | Heuristik internal berbasis bentuk logistik, dipakai agar margin rendah menaikkan peluang drop |
-| CRC, hop count, TTL | Error protokol paket | Heuristik internal |
-| GPS DOP | Noise GPS membesar di hutan/terrain | [R9], heuristik internal |
-| GPS multipath | Pantulan sinyal GPS dekat batu/terrain | [R10] |
-| Hardware delay, clock drift, watchdog | Delay sensor/proses dan gangguan node | Heuristik internal |
-| Baterai dan TX power drop | Konsumsi node dan pelemahan TX saat SoC rendah | Heuristik internal |
+| Metode | Dipakai untuk | Status | Rujukan / dasar |
+|---|---|---|---|
+| Free-space path loss | Redaman dasar jarak radio | Standar | [R1] |
+| Obstacle `trees` / vegetasi | Redaman hutan dan daun basah | Empiris / semi-empiris | [R2]; nilai `loss_db` dan `wet_factor` adalah parameter simulasi. |
+| Obstacle `rocks`, `crater`, `terrain` | Redaman zona batu/kawah/ridge berbasis kedalaman lintasan | Heuristik internal | Terinspirasi konsep obstruction/clutter/excess loss; nilai dB bukan angka baku material batu/kawah. |
+| Terrain shadow | Sampel terrain yang menutup LOS/Fresnel clearance | Heuristik berbasis konsep propagasi | [R3] untuk konsep LOS/diffraction; rumus `min(22, 3.2N)` adalah pendekatan internal. |
+| Knife-edge diffraction | Redaman difraksi punggungan gunung | Standar / semi-empiris | [R3]; implementasi memakai bentuk bertingkat agar `nu` besar tidak menghasilkan loss tidak realistis. |
+| Rain/weather attenuation | Hujan/kabut/badai sebagai redaman dan noise | Semi-empiris / heuristik | [R4] untuk konsep rain attenuation; profil `weather` adalah parameter simulasi karena tidak memakai rain rate aktual. |
+| Humidity loss | Loss kecil akibat kelembapan | Heuristik internal | Parameter kecil untuk sensitivitas lingkungan; perlu kalibrasi jika dipakai sebagai prediksi fisik. |
+| Temperature noise | Noise perangkat pada temperatur ekstrem | Heuristik internal | Representasi sederhana efek temperatur pada perangkat, bukan model komponen elektronik rinci. |
+| Rayleigh fading | Link NLOS/multipath tanpa LOS dominan | Standar statistik kanal | [R5] |
+| Rician fading | Link LOS dengan komponen dominan | Standar statistik kanal | [R5] |
+| LoRa sensitivity dan Time on Air | Efek SF, BW, CR, payload terhadap durasi dan sensitivitas | Vendor / teknis LoRa | [R6] |
+| Duty cycle | Batas penggunaan kanal radio | Aturan operasi / model kanal | [R8]; nilai 1 persen menjadi acuan, sedangkan 1,5 persen pada multi-hop adalah relaksasi internal simulasi. |
+| Collision | Peluang tabrakan paket saat banyak node aktif | Model probabilistik sederhana | [R7], [R8] untuk konteks collision LoRaWAN; rumus probabilitas efektif di kode adalah heuristik internal. |
+| Packet Error Rate | Drop probabilistik dari margin link | Heuristik internal | Fungsi logistik dipakai agar margin rendah menaikkan peluang drop; faktor multi-hop `0.7^(H-1)` adalah asumsi simulasi. |
+| CRC, hop count, TTL | Error protokol paket | Heuristik internal | Digunakan untuk merepresentasikan aturan paket dan batas protokol. |
+| GPS DOP | Noise GPS membesar di hutan/terrain | Konsep GNSS + heuristik | [R9]; pemetaan obstacle ke DOP adalah parameter simulasi. |
+| GPS multipath | Pantulan sinyal GPS dekat batu/terrain | Konsep GNSS + heuristik | [R10]; besaran multipath di kode adalah pendekatan skenario. |
+| Hardware delay, clock drift, watchdog | Delay sensor/proses dan gangguan node | Heuristik internal | Merepresentasikan ketidakidealan perangkat embedded secara sederhana. |
+| Baterai dan TX power drop | Konsumsi node dan pelemahan TX saat SoC rendah | Heuristik internal | Dipakai untuk melihat dampak energi terhadap link budget; perlu data perangkat nyata untuk kalibrasi akhir. |
 
 ## Daftar Referensi
 
