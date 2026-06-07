@@ -1,4 +1,4 @@
-# Konfigurasi multi-pendaki dengan posisi spawn acak.
+# Konfigurasi multi-pendaki dengan posisi spawn di area bawah/start rute.
 #
 # Jalankan contoh ini dengan:
 #   ros2 launch hiking_lora_sim hiking_lora_sim.launch.py \
@@ -21,7 +21,8 @@ spawn:
   #   random_relay    = pendaki muncul acak di sekitar relay LoRa.
   #   random_highland = pendaki muncul acak di area atas/puncak gunung.
   #   random_box      = pendaki muncul acak di sekitar center atau x/y range.
-  mode: random_relay
+  mode: random_box
+  center: route_start
 
   # Untuk mode random_relay:
   # Kosongkan relay_name agar tiap pendaki memilih relay secara acak.
@@ -32,13 +33,13 @@ spawn:
 
   # Rentang offset dari relay/center dalam world unit.
   # Dengan skala default 1 world unit = 35 meter.
-  x_offset_range: [-2.0, 2.0]
-  y_offset_range: [-2.0, 2.0]
+  x_offset_range: [-5.0, 5.0]
+  y_offset_range: [-4.0, 4.0]
 
   # true  = posisi random dari relay/atas diproyeksikan ke path terdekat,
   #         jadi pendaki langsung jalan di jalur visual.
   # false = pendaki muncul tepat di titik random lalu bergerak menuju path terdekat.
-  snap_to_path: true
+  snap_to_path: false
 
   # Kalau ingin random di area atas gunung, ganti blok spawn menjadi:
   #
