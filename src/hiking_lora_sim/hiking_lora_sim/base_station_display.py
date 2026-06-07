@@ -19,10 +19,12 @@ class BaseStationDisplay(Node):
         hiker_id = payload.get("hiker_id", "hiker")
         gps = payload["hiker_gps"]
         route = " -> ".join(payload["route"])
+        sos_prefix = "[SOS] " if payload.get("sos_active") else ""
         self.last_delivery_stamp = self.get_clock().now()
         self.get_logger().info(
-            "Received %s location lat=%.7f lon=%.7f alt=%.1fm hops=%d margin=%.1fdB route=%s"
+            "%sReceived %s location lat=%.7f lon=%.7f alt=%.1fm hops=%d margin=%.1fdB route=%s"
             % (
+                sos_prefix,
                 hiker_id,
                 gps["lat"],
                 gps["lon"],

@@ -267,6 +267,9 @@ class HikerAgent(Node):
         self._manual_y = self._spawn_y
         self._manual_yaw = self._entry_yaw
         self._manual_last_command_time = None
+        self._sos_active = False
+        self._sos_count = 0
+        self._sos_last_trigger_time = None
 
         self.gz_create_service = f"/world/{self.gazebo_world_name}/create"
         self.gz_pose_service = f"/world/{self.gazebo_world_name}/set_pose"
@@ -289,6 +292,7 @@ class HikerAgent(Node):
         self.status_pub = self.create_publisher(String, topic_for(self.topic_prefix, "status", "/hiker/status"), 10)
         self.battery_pub = self.create_publisher(String, topic_for(self.topic_prefix, "battery", "/hiker/battery"), 10)
         self.create_subscription(String, "/hiker/manual_control", self.manual_control_callback, 10)
+        self.create_subscription(String, "/hiker/sos", self.sos_callback, 10)
         self.aggregate_status_pub = None
         self.aggregate_battery_pub = None
         if self.publish_aggregate_topics:
@@ -308,6 +312,28 @@ class HikerAgent(Node):
             f"Publishing {topic_for(self.topic_prefix, 'gps', '/hiker/gps')} and "
             f"{topic_for(self.topic_prefix, 'pose', '/hiker/pose')}."
         )
+
+    def sos_callback(self, msg: String) -> None:
+        try:
+            command = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+
+        target = str(
+            command.get("target_hiker_id", command.get("hiker_id", command.get("target", "")))
+        ).strip()
+        if not self._manual_target_matches(target):
+            return
+
+        active = parameter_as_bool(command.get("active", True))
+        previous_active = self._sos_active
+        self._sos_active = active
+        if active:
+            self._sos_count += 1
+            self._sos_last_trigger_time = self.get_clock().now()
+            self.get_logger().warn(f"SOS triggered for {self.hiker_id}.")
+        elif previous_active:
+            self.get_logger().info(f"SOS cleared for {self.hiker_id}.")
 
     def manual_control_callback(self, msg: String) -> None:
         try:
@@ -624,6 +650,7 @@ class HikerAgent(Node):
             f"drift={clock_drift_ms:+.1f}ms hw_delay={hw_delay_ms:.0f}ms "
             f"weather={self._weather} speed_factor={speed_factor:.2f} "
             f"control={'manual' if manual_control else 'auto'} "
+            f"sos={str(self._sos_active).lower()} sos_count={self._sos_count} "
             f"moving={moving} route_finished={route_finished} "
             f"node_restarted={node_restarted}"
         )
@@ -642,6 +669,8 @@ class HikerAgent(Node):
                     "weather": self._weather,
                     "node_active": self._node_active,
                     "manual_control": manual_control,
+                    "sos_active": self._sos_active,
+                    "sos_count": self._sos_count,
                     "moving": moving,
                     "route_finished": route_finished,
                     "speed_world_units_s": round(effective_speed, 3),

@@ -46,7 +46,7 @@ class HikingLoraKeyPlugin : public gz::gui::Plugin
     {
       RCLCPP_INFO(
         this->node->get_logger(),
-        "Gazebo GUI keyboard control ready. Click/focus Gazebo, then use 1-9/0, WASD, R, Q, E.");
+        "Gazebo GUI keyboard control ready. Click/focus Gazebo, then use 1-9/0, WASD, B, R, Q, E.");
     }
   }
 
@@ -121,6 +121,8 @@ class HikingLoraKeyPlugin : public gz::gui::Plugin
       "/hiker/manual_control", 10);
     this->cameraPub = this->node->create_publisher<std_msgs::msg::String>(
       "/hiker/camera_control", 10);
+    this->sosPub = this->node->create_publisher<std_msgs::msg::String>(
+      "/hiker/sos", 10);
   }
 
   private: bool HandleKey(int _key)
@@ -146,6 +148,9 @@ class HikingLoraKeyPlugin : public gz::gui::Plugin
         return true;
       case Qt::Key_R:
         this->PublishManual("auto", 0.0, 0.0);
+        return true;
+      case Qt::Key_B:
+        this->PublishSos();
         return true;
       case Qt::Key_W:
         this->PublishManual("manual", 1.0, 0.0);
@@ -232,6 +237,25 @@ class HikingLoraKeyPlugin : public gz::gui::Plugin
     this->cameraPub->publish(msg);
   }
 
+  private: void PublishSos()
+  {
+    if (!this->sosPub)
+    {
+      return;
+    }
+
+    std_msgs::msg::String msg;
+    const std::string target = this->TargetHikerId();
+    msg.data = "{\"target_hiker_id\":\"" + target
+      + "\",\"hiker_id\":\"" + target
+      + "\",\"active\":true,\"source\":\"gazebo_gui\",\"event\":\"sos\"}";
+    this->sosPub->publish(msg);
+    if (this->node)
+    {
+      RCLCPP_WARN(this->node->get_logger(), "SOS requested by %s.", target.c_str());
+    }
+  }
+
   private: void PublishCameraAdjust(const std::string &_field, double _value)
   {
     if (!this->cameraPub)
@@ -261,6 +285,7 @@ class HikingLoraKeyPlugin : public gz::gui::Plugin
   private: std::shared_ptr<rclcpp::Node> node;
   private: rclcpp::Publisher<std_msgs::msg::String>::SharedPtr manualPub;
   private: rclcpp::Publisher<std_msgs::msg::String>::SharedPtr cameraPub;
+  private: rclcpp::Publisher<std_msgs::msg::String>::SharedPtr sosPub;
 };
 }  // namespace hiking_lora_gz_gui
 
