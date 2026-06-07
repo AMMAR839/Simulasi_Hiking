@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/HikingLoraKeyPlugin">
+    <file alias="HikingLoraKeyPlugin.qml">../qml/HikingLoraKeyPlugin.qml</file>
+  </qresource>
+</RCC>

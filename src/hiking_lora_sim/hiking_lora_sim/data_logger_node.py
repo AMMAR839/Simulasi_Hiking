@@ -38,7 +38,7 @@ _POS_FIELDS = [
     "timestamp_s", "hiker_id", "trail",
     "true_x_wu", "true_y_wu", "terrain_z_wu", "altitude_m",
     "gps_lat", "gps_lon",
-    "gps_error_m", "dop",
+    "gps_error_m", "dop", "battery_pct",
     "drift_ms", "hw_delay_ms",
     "weather",
 ]
@@ -58,10 +58,12 @@ _NET_FIELDS = [
     # LoRa parameter
     "spreading_factor", "data_rate_bps", "time_on_air_ms",
     "duty_cycle_pct",
+    "end_to_end_latency_ms", "queue_delay_ms", "processing_delay_ms",
+    "retransmission_count",
     # Lingkungan
     "weather", "temperature_c", "humidity_pct",
     # Rute
-    "route", "hop_count",
+    "entry_node", "route", "hop_count",
 ]
 
 
@@ -138,6 +140,7 @@ class DataLoggerNode(Node):
             "gps_lon":      m["gps_lon"],
             "gps_error_m":  m["gps_err"],
             "dop":          m["dop"],
+            "battery_pct":  m["battery"],
             "drift_ms":     m["drift"],
             "hw_delay_ms":  m["hw_delay"],
             "weather":      m["weather"],
@@ -194,11 +197,16 @@ class DataLoggerNode(Node):
             "data_rate_bps":    ev.get("data_rate_bps", ""),
             "time_on_air_ms":   ev.get("time_on_air_ms", ""),
             "duty_cycle_pct":   ev.get("duty_cycle_used_pct", ""),
+            "end_to_end_latency_ms": ev.get("end_to_end_latency_ms", ""),
+            "queue_delay_ms":        ev.get("queue_delay_ms", ""),
+            "processing_delay_ms":   ev.get("processing_delay_ms", ""),
+            "retransmission_count":  ev.get("retransmission_count", ""),
             # Lingkungan
             "weather":          ev.get("weather", ""),
             "temperature_c":    ev.get("temperature_c", ""),
             "humidity_pct":     ev.get("humidity_pct", ""),
             # Rute
+            "entry_node":        ev.get("entry_node", ""),
             "route":            " -> ".join(ev.get("route", [])),
             "hop_count":        ev.get("hop_count", ""),
         })
