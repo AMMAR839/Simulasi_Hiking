@@ -2,6 +2,7 @@ import os
 import random
 from math import ceil, hypot
 
+from ament_index_python.packages import PackageNotFoundError, get_package_prefix
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, SetEnvironmentVariable
 from launch.conditions import IfCondition
@@ -426,7 +427,29 @@ def _launch_setup(context, *args, **kwargs):
         "reference_lon": LaunchConfiguration("reference_lon"),
     }
 
-    actions = [
+    actions = []
+    if _bool_value(_cfg(context, "use_gazebo"), True) and _bool_value(
+        _cfg(context, "use_gazebo_gui_keyboard"), True
+    ):
+        try:
+            gui_plugin_prefix = get_package_prefix("hiking_lora_gz_gui")
+        except PackageNotFoundError as exc:
+            raise RuntimeError(
+                "Gazebo GUI keyboard plugin belum ter-build. Jalankan: "
+                "colcon build --symlink-install"
+            ) from exc
+        actions.append(
+            SetEnvironmentVariable(
+                "GZ_GUI_PLUGIN_PATH",
+                [
+                    os.path.join(gui_plugin_prefix, "lib"),
+                    ":",
+                    EnvironmentVariable("GZ_GUI_PLUGIN_PATH", default_value=""),
+                ],
+            )
+        )
+
+    actions.append(
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(ros_gz_sim_launch),
             condition=IfCondition(use_gazebo),
@@ -434,7 +457,7 @@ def _launch_setup(context, *args, **kwargs):
                 "gz_args": f"{_cfg(context, 'gz_args')} {world_path}",
             }.items(),
         )
-    ]
+    )
 
     spawn_seed = int(_cfg(context, "spawn_seed"))
     for index, spec in enumerate(hiker_specs, start=1):
@@ -482,6 +505,8 @@ def _launch_setup(context, *args, **kwargs):
                         "weather": LaunchConfiguration("weather"),
                         "temperature_c": LaunchConfiguration("temperature_c"),
                         "humidity_pct": LaunchConfiguration("humidity_pct"),
+                        "manual_move_speed_world_units_s": LaunchConfiguration("manual_move_speed_world_units_s"),
+                        "manual_turn_rate_rad_s": LaunchConfiguration("manual_turn_rate_rad_s"),
                     },
                 ],
             )
@@ -516,12 +541,69 @@ def _launch_setup(context, *args, **kwargs):
             )
         )
 
+    if _bool_value(_cfg(context, "use_camera_views"), True) and _bool_value(
+        _cfg(context, "use_gazebo"), True
+    ):
+        camera_target = _cfg(context, "camera_target_hiker").strip()
+        if not camera_target:
+            camera_target = "hiker_1" if multi_mode else "hiker"
+        actions.append(
+            Node(
+                package="hiking_lora_sim",
+                executable="camera_controller",
+                output="screen",
+                parameters=[
+                    {
+                        "target_hiker_id": camera_target,
+                        "active_hiker_count": total_hikers,
+                        "camera_update_rate_hz": LaunchConfiguration("camera_update_rate_hz"),
+                        "gui_camera_timeout_ms": LaunchConfiguration("gui_camera_timeout_ms"),
+                        "follow_camera_height_world_units": LaunchConfiguration(
+                            "follow_camera_height_world_units"
+                        ),
+                        "follow_camera_offset_x": LaunchConfiguration("follow_camera_offset_x"),
+                        "follow_camera_offset_y": LaunchConfiguration("follow_camera_offset_y"),
+                        "follow_camera_pitch_rad": LaunchConfiguration("follow_camera_pitch_rad"),
+                        "follow_camera_roll_rad": LaunchConfiguration("follow_camera_roll_rad"),
+                        "follow_camera_yaw_mode": LaunchConfiguration("follow_camera_yaw_mode"),
+                        "follow_camera_fixed_yaw_rad": LaunchConfiguration(
+                            "follow_camera_fixed_yaw_rad"
+                        ),
+                        "overview_camera_x": LaunchConfiguration("overview_camera_x"),
+                        "overview_camera_y": LaunchConfiguration("overview_camera_y"),
+                        "overview_camera_z": LaunchConfiguration("overview_camera_z"),
+                        "overview_camera_roll_rad": LaunchConfiguration("overview_camera_roll_rad"),
+                        "overview_camera_pitch_rad": LaunchConfiguration("overview_camera_pitch_rad"),
+                        "overview_camera_yaw_rad": LaunchConfiguration("overview_camera_yaw_rad"),
+                        "overview_camera_min_z": LaunchConfiguration("overview_camera_min_z"),
+                        "overview_camera_max_z": LaunchConfiguration("overview_camera_max_z"),
+                    }
+                ],
+            )
+        )
+
     actions.extend(
         [
             Node(
                 package="hiking_lora_sim",
                 executable="base_station_display",
                 output="screen",
+            ),
+            Node(
+                package="hiking_lora_sim",
+                executable="keyboard_teleop",
+                output="screen",
+                emulate_tty=True,
+                condition=IfCondition(LaunchConfiguration("use_keyboard_teleop")),
+                parameters=[
+                    {
+                        "overview_camera_xy_step": LaunchConfiguration("overview_camera_xy_step"),
+                        "overview_camera_z_step": LaunchConfiguration("overview_camera_z_step"),
+                        "overview_camera_angle_step_rad": LaunchConfiguration(
+                            "overview_camera_angle_step_rad"
+                        ),
+                    }
+                ],
             ),
             Node(
                 package="hiking_lora_sim",
@@ -545,7 +627,8 @@ def generate_launch_description():
         [
             # --- Gazebo ---
             DeclareLaunchArgument("use_gazebo", default_value="true"),
-            DeclareLaunchArgument("gz_args", default_value="-r -v 3 --render-engine-gui ogre"),
+            DeclareLaunchArgument("gz_args", default_value="-r -v 3 --render-engine-gui ogre2"),
+            DeclareLaunchArgument("use_gazebo_gui_keyboard", default_value="true"),
 
             # --- GPS & skala ---
             DeclareLaunchArgument("meters_per_world_unit", default_value="35.0"),
@@ -577,6 +660,37 @@ def generate_launch_description():
             DeclareLaunchArgument("hiker_speed_world_units_s", default_value="0.85"),
             DeclareLaunchArgument("gazebo_visual_rate_hz", default_value="10.0"),
             DeclareLaunchArgument("gazebo_hiker_z_offset", default_value="0.08"),
+            DeclareLaunchArgument("use_keyboard_teleop", default_value="false"),
+            DeclareLaunchArgument("manual_move_speed_world_units_s", default_value="0.85"),
+            DeclareLaunchArgument("manual_turn_rate_rad_s", default_value="1.8"),
+
+            # --- Kamera Gazebo ---
+            DeclareLaunchArgument("use_camera_views", default_value="true"),
+            DeclareLaunchArgument("camera_target_hiker", default_value=""),
+            DeclareLaunchArgument("camera_update_rate_hz", default_value="8.0"),
+            DeclareLaunchArgument("gui_camera_timeout_ms", default_value="80"),
+            DeclareLaunchArgument("follow_camera_height_world_units", default_value="24.0"),
+            DeclareLaunchArgument("follow_camera_offset_x", default_value="0.0"),
+            DeclareLaunchArgument("follow_camera_offset_y", default_value="0.0"),
+            DeclareLaunchArgument("follow_camera_roll_rad", default_value="0.0"),
+            DeclareLaunchArgument("follow_camera_pitch_rad", default_value="1.5708"),
+            DeclareLaunchArgument(
+                "follow_camera_yaw_mode",
+                default_value="fixed",
+                choices=["hiker", "fixed"],
+            ),
+            DeclareLaunchArgument("follow_camera_fixed_yaw_rad", default_value="0.0"),
+            DeclareLaunchArgument("overview_camera_x", default_value="0.0"),
+            DeclareLaunchArgument("overview_camera_y", default_value="0.0"),
+            DeclareLaunchArgument("overview_camera_z", default_value="220.0"),
+            DeclareLaunchArgument("overview_camera_roll_rad", default_value="0.0"),
+            DeclareLaunchArgument("overview_camera_pitch_rad", default_value="1.5708"),
+            DeclareLaunchArgument("overview_camera_yaw_rad", default_value="0.0"),
+            DeclareLaunchArgument("overview_camera_min_z", default_value="20.0"),
+            DeclareLaunchArgument("overview_camera_max_z", default_value="420.0"),
+            DeclareLaunchArgument("overview_camera_xy_step", default_value="8.0"),
+            DeclareLaunchArgument("overview_camera_z_step", default_value="10.0"),
+            DeclareLaunchArgument("overview_camera_angle_step_rad", default_value="0.10"),
 
             # --- LoRa RF ---
             # EByte E220-900T22D: TX max 22 dBm (Ref: EByte datasheet v1.0)

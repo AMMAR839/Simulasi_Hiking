@@ -6,3 +6,26 @@ __pycache__/
 *.pyo
 *.egg-info/
 
+# Local assistant/editor state
+.claude/
+kill.md
+
+# Generated simulation logs and analysis outputs
+run_logs/
+sim_logs_output/
+
+# Generated report, graph, and video artifacts
+BAB_10*.md
+GRAFIK_HASIL_POC.md
+VIDEO_SCRIPT_POC*.md
+bab10_10hiker_figures/
+figures_bab10_revisi/
+figures_poc_sim/
+grafik_hasil/
+video_assets/
+video_poc_figures/
+
+# One-off report/graph generation helpers
+tools/generate_bab10_10hiker_figures.py
+tools/generate_video_slides.py
+tools/grafik_hasil_simulasi.py

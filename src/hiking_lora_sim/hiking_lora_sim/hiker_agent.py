@@ -24,6 +24,7 @@ from hiking_lora_sim.scenario import (
     ACTIVE_TRAIL_NAME,
     RADIO_OBSTACLES,
     TRAILS,
+    WORLD_EXTENT,
     load_scenario_yaml,
     local_to_gps,
     nearest_trail_progress,
@@ -142,6 +143,9 @@ class HikerAgent(Node):
         self.declare_parameter("weather", "clear")
         self.declare_parameter("temperature_c", 22.0)
         self.declare_parameter("humidity_pct", 60.0)
+        # Kontrol manual dari keyboard teleop.
+        self.declare_parameter("manual_move_speed_world_units_s", 0.85)
+        self.declare_parameter("manual_turn_rate_rad_s", 1.8)
 
         self.speed_world_units_s = float(self.get_parameter("speed_world_units_s").value)
         self.gps_noise_std_m = float(self.get_parameter("gps_noise_std_m").value)
@@ -201,6 +205,12 @@ class HikerAgent(Node):
         self._weather = str(self.get_parameter("weather").value)
         self._temperature_c = float(self.get_parameter("temperature_c").value)
         self._humidity_pct = float(self.get_parameter("humidity_pct").value)
+        self.manual_move_speed_world_units_s = float(
+            self.get_parameter("manual_move_speed_world_units_s").value
+        )
+        self.manual_turn_rate_rad_s = float(
+            self.get_parameter("manual_turn_rate_rad_s").value
+        )
 
         # Muat skenario dari YAML jika ada
         routes_file = str(self.get_parameter("routes_file").value)
@@ -252,6 +262,12 @@ class HikerAgent(Node):
         if self._spawn_connector_length > 0.01:
             self._entry_yaw = atan2(self._entry_y - self._spawn_y, self._entry_x - self._spawn_x)
 
+        self._manual_enabled = False
+        self._manual_x = self._spawn_x
+        self._manual_y = self._spawn_y
+        self._manual_yaw = self._entry_yaw
+        self._manual_last_command_time = None
+
         self.gz_create_service = f"/world/{self.gazebo_world_name}/create"
         self.gz_pose_service = f"/world/{self.gazebo_world_name}/set_pose"
         self.gz_node = None
@@ -272,6 +288,7 @@ class HikerAgent(Node):
         self.gps_pub = self.create_publisher(NavSatFix, topic_for(self.topic_prefix, "gps", "/hiker/gps"), 10)
         self.status_pub = self.create_publisher(String, topic_for(self.topic_prefix, "status", "/hiker/status"), 10)
         self.battery_pub = self.create_publisher(String, topic_for(self.topic_prefix, "battery", "/hiker/battery"), 10)
+        self.create_subscription(String, "/hiker/manual_control", self.manual_control_callback, 10)
         self.aggregate_status_pub = None
         self.aggregate_battery_pub = None
         if self.publish_aggregate_topics:
@@ -292,7 +309,84 @@ class HikerAgent(Node):
             f"{topic_for(self.topic_prefix, 'pose', '/hiker/pose')}."
         )
 
-    def route_pose_at(self, elapsed: float):
+    def manual_control_callback(self, msg: String) -> None:
+        try:
+            command = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+
+        target = str(command.get("target_hiker_id", command.get("target", ""))).strip()
+        if not self._manual_target_matches(target):
+            return
+
+        mode = str(command.get("mode", "manual")).strip().lower()
+        if mode == "auto":
+            self._return_manual_hiker_to_path()
+            return
+        if mode != "manual":
+            return
+
+        elapsed = (self.get_clock().now() - self.start_time).nanoseconds / 1e9
+        if not self._manual_enabled:
+            x, y, yaw, _, _, _, _ = self._auto_route_pose_at(elapsed)
+            self._manual_x = x
+            self._manual_y = y
+            self._manual_yaw = yaw
+            self._manual_enabled = True
+            self.get_logger().info(f"Manual keyboard control enabled for {self.hiker_id}.")
+
+        now = self.get_clock().now()
+        duration_s = self._bounded_float(command.get("duration_s", self._dt), 0.02, 0.5)
+        if self._manual_last_command_time is None:
+            duration_s = min(duration_s, 0.05)
+        else:
+            elapsed_since_last_command_s = (
+                now - self._manual_last_command_time
+            ).nanoseconds / 1e9
+            if elapsed_since_last_command_s > 0.0:
+                duration_s = min(duration_s, max(0.02, elapsed_since_last_command_s))
+        forward = self._bounded_float(command.get("forward", 0.0), -1.0, 1.0)
+        turn = self._bounded_float(command.get("turn", 0.0), -1.0, 1.0)
+
+        self._manual_yaw += turn * self.manual_turn_rate_rad_s * duration_s
+        distance = forward * self.manual_move_speed_world_units_s * duration_s
+        self._manual_x += cos(self._manual_yaw) * distance
+        self._manual_y += sin(self._manual_yaw) * distance
+        self._manual_x = max(-WORLD_EXTENT, min(WORLD_EXTENT, self._manual_x))
+        self._manual_y = max(-WORLD_EXTENT, min(WORLD_EXTENT, self._manual_y))
+        self._manual_last_command_time = now
+
+    def _manual_target_matches(self, target: str) -> bool:
+        if target == self.hiker_id:
+            return True
+        return self.hiker_id == "hiker" and target in {"hiker_1", "hiker"}
+
+    def _return_manual_hiker_to_path(self) -> None:
+        if not self._manual_enabled:
+            return
+
+        start_progress = nearest_trail_progress(self._manual_x, self._manual_y, self.trail_points)
+        self._start_distance_world = self._trail_length_world * start_progress
+        self._entry_x, self._entry_y, self._entry_yaw = point_on_trail(
+            self._start_distance_world,
+            self.trail_points,
+        )
+        self._spawn_x = self._manual_x
+        self._spawn_y = self._manual_y
+        self._spawn_connector_length = hypot(
+            self._entry_x - self._spawn_x,
+            self._entry_y - self._spawn_y,
+        )
+        if self._spawn_connector_length > 0.01:
+            self._entry_yaw = atan2(
+                self._entry_y - self._spawn_y,
+                self._entry_x - self._spawn_x,
+            )
+        self.start_time = self.get_clock().now()
+        self._manual_enabled = False
+        self.get_logger().info(f"Manual keyboard control disabled for {self.hiker_id}; returning to path.")
+
+    def _auto_route_pose_at(self, elapsed: float):
         speed_factor = _WEATHER_SPEED_FACTOR.get(self._weather, 1.0)
         effective_speed = self.speed_world_units_s * speed_factor
         if self._low_power_mode:
@@ -313,11 +407,11 @@ class HikerAgent(Node):
         net_travel = max(0.0, travel_distance - self._spawn_connector_length)
         period = 2.0 * self._trail_length_world
         if period > 0.0:
-            phase = net_travel % period
+            phase = (self._start_distance_world + net_travel) % period
             if phase <= self._trail_length_world:
-                path_distance = self._start_distance_world + phase
+                path_distance = phase
             else:
-                path_distance = self._start_distance_world + (period - phase)
+                path_distance = period - phase
         else:
             path_distance = self._start_distance_world
 
@@ -325,6 +419,21 @@ class HikerAgent(Node):
         x, y, yaw = point_on_trail(path_distance, self.trail_points)
         terrain_z = terrain_height_world(x, y)
         return x, y, yaw, terrain_z, speed_factor, effective_speed, route_finished
+
+    def route_pose_at(self, elapsed: float):
+        if self._manual_enabled:
+            terrain_z = terrain_height_world(self._manual_x, self._manual_y)
+            speed_factor = _WEATHER_SPEED_FACTOR.get(self._weather, 1.0)
+            return self._manual_x, self._manual_y, self._manual_yaw, terrain_z, speed_factor, 0.0, False
+        return self._auto_route_pose_at(elapsed)
+
+    @staticmethod
+    def _bounded_float(value, lower: float, upper: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            parsed = 0.0
+        return max(lower, min(upper, parsed))
 
     def publish_state(self) -> None:
         # --- Node shutdown saat baterai habis ---
@@ -505,6 +614,8 @@ class HikerAgent(Node):
 
         gps_error_m = hypot(noise_east, noise_north)
         status = String()
+        manual_control = self._manual_enabled
+        moving = (not route_finished) and not manual_control
         status.data = (
             f"{self.hiker_id} track={self.trail_name} x={x:.2f} y={y:.2f} "
             f"terrain_z={terrain_z:.2f} alt={altitude:.1f}m "
@@ -512,7 +623,8 @@ class HikerAgent(Node):
             f"dop={dop:.2f} gps_err={gps_error_m:.1f}m "
             f"drift={clock_drift_ms:+.1f}ms hw_delay={hw_delay_ms:.0f}ms "
             f"weather={self._weather} speed_factor={speed_factor:.2f} "
-            f"moving={not route_finished} route_finished={route_finished} "
+            f"control={'manual' if manual_control else 'auto'} "
+            f"moving={moving} route_finished={route_finished} "
             f"node_restarted={node_restarted}"
         )
         self.status_pub.publish(status)
@@ -529,7 +641,8 @@ class HikerAgent(Node):
                     "gps_error_m": round(gps_error_m, 1),
                     "weather": self._weather,
                     "node_active": self._node_active,
-                    "moving": not route_finished,
+                    "manual_control": manual_control,
+                    "moving": moving,
                     "route_finished": route_finished,
                     "speed_world_units_s": round(effective_speed, 3),
                     "text": status.data,
