@@ -28,15 +28,18 @@ from hiking_lora_sim.scenario import (
 )
 
 # ---------------------------------------------------------------------------
-# Konstanta LoRa per Spreading Factor (BW=125 kHz, sesuai SX1276)
+# Sensitivitas receiver per Spreading Factor — EByte E220-900T22D (LLCC68)
+# BW=125 kHz, CR=4/5, f=915 MHz
+# Sumber: EByte E220-900T22D Datasheet v1.0, Tabel Parameter RF
+#         Semtech LLCC68 Datasheet DS.LLCC68.W.APP, Table 14
 # ---------------------------------------------------------------------------
 _SF_SENSITIVITY: Dict[int, float] = {
-    7: -123.0,
-    8: -126.0,
-    9: -129.0,
-    10: -132.0,
-    11: -134.5,
-    12: -136.0,
+    7:  -131.0,   # LLCC68 @SF7,  BW=125 kHz, CR=4/5
+    8:  -134.0,   # LLCC68 @SF8
+    9:  -137.0,   # LLCC68 @SF9
+    10: -139.0,   # LLCC68 @SF10
+    11: -142.0,   # LLCC68 @SF11
+    12: -148.0,   # LLCC68 @SF12  (Spesifikasi E220-900T22D)
 }
 
 _SF_DATA_RATE: Dict[int, float] = {
@@ -158,10 +161,14 @@ class LoraNetwork(Node):
         super().__init__("lora_network")
 
         self.declare_parameter("meters_per_world_unit", 35.0)
-        self.declare_parameter("frequency_mhz", 915.0)
-        self.declare_parameter("tx_power_dbm", 17.0)
-        self.declare_parameter("antenna_gain_db", 2.0)
-        self.declare_parameter("terrain_loss_db_per_km", 2.5)
+        self.declare_parameter("frequency_mhz", 923.0)
+        # EByte E220-900T22D: TX max 22 dBm (Ref: EByte datasheet v1.0 §3.1)
+        self.declare_parameter("tx_power_dbm", 22.0)
+        # Antena SMA female 5 dBi (spesifikasi komponen hardware proyek)
+        self.declare_parameter("antenna_gain_db", 5.0)
+        # Terrain scatter (ground bounce, hanya untuk LOS — NLOS sudah di shadow model)
+        # 1.0 dB/km: sesuai ITU-R P.452 rural sub-GHz (sebelumnya 2.5 → bias berlebihan)
+        self.declare_parameter("terrain_loss_db_per_km", 1.0)
         self.declare_parameter("reference_lat", -6.89148)
         self.declare_parameter("reference_lon", 107.61066)
         self.declare_parameter("hiker_id", "hiker")
@@ -521,14 +528,18 @@ class LoraNetwork(Node):
                 delivered = False
                 per_drop = True
 
-        # --- Channel collision ---
-        # MODIFIED: Reduce collision prob untuk relay networks (better scheduling)
+        # --- Channel collision (pure ALOHA model, Abramson 1970) ---
+        # G = offered load = n_tx × ToA / T_window, dimana setiap node TX sekali
+        # per tx_interval_s. P_collision = 1 - e^(-2G) (pure ALOHA).
+        # Relay networks sedikit mengurangi collision karena TDMA-like scheduling.
         collision_drop = False
         if delivered:
-            n_nodes = len(self._lora_nodes) + self.active_hiker_count
-            # Base collision prob reduced by 40% untuk relay networks
-            base_col_prob = _BASE_COLLISION_PROB * 0.6
-            col_prob = base_col_prob * n_nodes * (self.time_on_air_ms / 1000.0)
+            n_contenders = len(self._lora_nodes) + self.active_hiker_count
+            toa_s = self.time_on_air_ms / 1000.0
+            tx_interval_s = toa_s / _DUTY_CYCLE_LIMIT  # interval tiap node (worst case)
+            g_load = n_contenders * toa_s / tx_interval_s  # offered load = n × duty_cycle
+            col_prob = 1.0 - exp(-2.0 * g_load)  # pure ALOHA collision prob
+            col_prob *= 0.6  # relay network scheduling mengurangi 40%
             if self._collision_rng.random() < col_prob:
                 delivered = False
                 collision_drop = True
@@ -786,12 +797,27 @@ class LoraNetwork(Node):
 
         # Obstacle loss (depth-aware + wet foliage)
         obstacle_loss, crossed = self.obstacle_loss(left, right)
+        obstacle_loss_raw = obstacle_loss  # simpan sebelum koreksi untuk is_los
 
         # Terrain shadow + knife-edge diffraction
         shadow_loss, diffraction_loss = self.terrain_shadow_loss(left, right)
 
-        # Terrain scatter loss (distance-dependent)
-        terrain_loss = distance_km * self.terrain_loss_db_per_km
+        # Korelasi terrain-obstacle (ITU-R P.833 §4.3):
+        # Ketika terrain mendominasi (shadow/diffraction besar), sinyal melewati
+        # puncak terrain melalui difraksi — jalur ini sebagian besar menghindari
+        # vegetasi di lembah. Obstacle loss dikurangi proporsional dengan dominasi terrain.
+        terrain_excess_db = shadow_loss + diffraction_loss
+        if terrain_excess_db > 5.0:
+            terrain_dom = min(1.0, terrain_excess_db / 25.0)
+            obstacle_loss = obstacle_loss * (1.0 - 0.60 * terrain_dom)
+
+        # Terrain scatter (ground bounce, ITU-R P.452):
+        # Hanya relevan untuk jalur LOS (shadow=0, diffraction=0).
+        # Untuk NLOS, komponen scatter sudah termasuk dalam model shadow/diffraction.
+        if shadow_loss == 0.0 and diffraction_loss == 0.0:
+            terrain_loss = distance_km * self.terrain_loss_db_per_km
+        else:
+            terrain_loss = 0.0
 
         # Weather attenuation
         weather_loss = (
@@ -835,7 +861,7 @@ class LoraNetwork(Node):
         # Routing (route_to_base, select_entry_node) memanggil dengan with_fading=False
         # agar Dijkstra menggunakan margin deterministik → routing stabil, tidak no_route acak.
         # Fading tetap dipakai di entry_link display dan PER model (via tick()).
-        is_los = obstacle_loss == 0.0 and shadow_loss == 0.0
+        is_los = obstacle_loss_raw == 0.0 and shadow_loss == 0.0
         fading_loss = 0.0
         fading_type = "none"
         if with_fading and self.fading_model != "none":

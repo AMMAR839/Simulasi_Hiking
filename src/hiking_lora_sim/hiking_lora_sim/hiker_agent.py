@@ -101,7 +101,14 @@ class HikerAgent(Node):
         super().__init__("hiker_agent")
 
         self.declare_parameter("speed_world_units_s", 0.85)
+        # u-blox NEO-6M V2: CEP=2.5m open-sky → σ = CEP/1.177 ≈ 2.12m/axis
+        # Ref: u-blox NEO-6M Product Summary UBX-09003295-R08
+        # Diaplikasikan sebagai: effective_noise = σ × DOP + multipath
+        # Mountain terrain DOP=1.5–2.5 → 95th pct ≈ 8–12 m (realistis)
         self.declare_parameter("gps_noise_std_m", 2.0)
+        # EByte E220-900T22D: TX max 22 dBm (Ref: EByte datasheet v1.0 §3.1)
+        # Digunakan sebagai dasar kalkulasi baterai dan effective_tx_power_dbm
+        self.declare_parameter("tx_power_dbm", 22.0)
         self.declare_parameter("meters_per_world_unit", 35.0)
         self.declare_parameter("reference_lat", -6.89148)
         self.declare_parameter("reference_lon", 107.61066)
@@ -138,6 +145,7 @@ class HikerAgent(Node):
 
         self.speed_world_units_s = float(self.get_parameter("speed_world_units_s").value)
         self.gps_noise_std_m = float(self.get_parameter("gps_noise_std_m").value)
+        self._nominal_tx_power_dbm = float(self.get_parameter("tx_power_dbm").value)
         self.meters_per_world_unit = float(self.get_parameter("meters_per_world_unit").value)
         self.reference_lat = float(self.get_parameter("reference_lat").value)
         self.reference_lon = float(self.get_parameter("reference_lon").value)
@@ -300,15 +308,23 @@ class HikerAgent(Node):
             terrain_z = terrain_height_world(x, y)
             return x, y, yaw, terrain_z, speed_factor, effective_speed, False
 
-        path_distance = self._start_distance_world + max(
-            0.0,
-            travel_distance - self._spawn_connector_length,
-        )
-        route_finished = path_distance >= self._trail_length_world
+        # Bounce (ping-pong): hiker berbalik arah di ujung rute sehingga data
+        # dikumpulkan dari seluruh segmen terrain, termasuk zona NLOS yang jauh.
+        net_travel = max(0.0, travel_distance - self._spawn_connector_length)
+        period = 2.0 * self._trail_length_world
+        if period > 0.0:
+            phase = net_travel % period
+            if phase <= self._trail_length_world:
+                path_distance = self._start_distance_world + phase
+            else:
+                path_distance = self._start_distance_world + (period - phase)
+        else:
+            path_distance = self._start_distance_world
+
+        route_finished = False  # tidak pernah "selesai" — terus bounce
         x, y, yaw = point_on_trail(path_distance, self.trail_points)
         terrain_z = terrain_height_world(x, y)
-        moving_speed = 0.0 if route_finished else effective_speed
-        return x, y, yaw, terrain_z, speed_factor, moving_speed, route_finished
+        return x, y, yaw, terrain_z, speed_factor, effective_speed, route_finished
 
     def publish_state(self) -> None:
         # --- Node shutdown saat baterai habis ---
@@ -375,7 +391,8 @@ class HikerAgent(Node):
         multipath_m = _multipath_noise_m(x, y, self._gps_obstacles, self.gps_noise_std_m)
 
         # --- Total GPS noise = gaussian × DOP + multipath ---
-        effective_noise_m = self.gps_noise_std_m * dop + multipath_m
+        # Cap 15m: NEO-6M V2 mountain worst-case 95th pct ≈ 12m (UBX-09003295-R08 §3.2)
+        effective_noise_m = min(self.gps_noise_std_m * dop + multipath_m, 15.0)
 
         noise_east  = self.random.gauss(0.0, effective_noise_m)
         noise_north = self.random.gauss(0.0, effective_noise_m)
@@ -438,9 +455,9 @@ class HikerAgent(Node):
         # --- TX power reduction saat baterai < 30% SoC (max −6 dBm) ---
         if soc < 0.30:
             tx_reduction_db = (1.0 - soc / 0.30) * 6.0
-            effective_tx_power_dbm = 17.0 - tx_reduction_db
+            effective_tx_power_dbm = self._nominal_tx_power_dbm - tx_reduction_db
         else:
-            effective_tx_power_dbm = 17.0
+            effective_tx_power_dbm = self._nominal_tx_power_dbm
 
         total_energy_mj = self._charge_used_mah / 1000.0 * self._supply_voltage_v * 3600.0
         avg_current_ma = (

@@ -337,6 +337,31 @@ def _custom_spawn_xy(raw_xy: str):
         raise RuntimeError('spawn_xy harus angka, contoh spawn_xy:="-104,-94".') from exc
 
 
+def _parse_spreading_factors(context, n_hikers: int) -> list:
+    """
+    Parse spreading_factors (comma-separated) → list SF per hiker (round-robin).
+    Jika kosong, semua hiker pakai spreading_factor tunggal.
+    Valid SF: 7, 8, 9, 10, 11, 12 (SX1276/LLCC68 BW=125 kHz).
+    Contoh: spreading_factors:="7,9,12" dengan 3 pendaki → hiker1=SF7, hiker2=SF9, hiker3=SF12
+    """
+    raw = _cfg(context, "spreading_factors").strip()
+    base_sf = int(_cfg(context, "spreading_factor"))
+    if not raw:
+        return [base_sf] * n_hikers
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    valid_sfs = {7, 8, 9, 10, 11, 12}
+    sfs = []
+    for p in parts:
+        try:
+            sf = int(p)
+        except ValueError as exc:
+            raise RuntimeError(f"spreading_factors harus integer, bukan '{p}'") from exc
+        if sf not in valid_sfs:
+            raise RuntimeError(f"SF tidak valid: {sf}. Pilihan: {sorted(valid_sfs)}")
+        sfs.append(sf)
+    return [sfs[i % len(sfs)] for i in range(n_hikers)]
+
+
 def _launch_setup(context, *args, **kwargs):
     routes_file = _cfg(context, "routes_file").strip()
     active_trails = _active_trails(routes_file)
@@ -384,6 +409,7 @@ def _launch_setup(context, *args, **kwargs):
 
     total_hikers = len(hiker_specs)
     multi_mode = total_hikers > 1
+    sf_list = _parse_spreading_factors(context, total_hikers)
 
     pkg_share = FindPackageShare("hiking_lora_sim").perform(context)
     first_route = hiker_specs[0]["route"]
@@ -433,6 +459,7 @@ def _launch_setup(context, *args, **kwargs):
                     {
                         "hiker_id": hiker_id,
                         "topic_prefix": topic_prefix,
+                        "tx_power_dbm": LaunchConfiguration("tx_power_dbm"),
                         "gps_noise_std_m": LaunchConfiguration("gps_noise_std_m"),
                         "ttff_delay_s": LaunchConfiguration("ttff_delay_s"),
                         "speed_world_units_s": LaunchConfiguration("hiker_speed_world_units_s"),
@@ -474,7 +501,10 @@ def _launch_setup(context, *args, **kwargs):
                         "publish_global_events": multi_mode,
                         "active_hiker_count": total_hikers,
                         "tx_power_dbm": LaunchConfiguration("tx_power_dbm"),
-                        "spreading_factor": LaunchConfiguration("spreading_factor"),
+                        "antenna_gain_db": LaunchConfiguration("antenna_gain_db"),
+                        "terrain_loss_db_per_km": LaunchConfiguration("terrain_loss_db_per_km"),
+                        # Per-hiker SF: integer langsung (bukan str) agar tipe INTEGER match
+                        "spreading_factor": sf_list[index - 1],
                         "fading_model": LaunchConfiguration("fading_model"),
                         "rician_k_db": LaunchConfiguration("rician_k_db"),
                         "routes_file": LaunchConfiguration("routes_file"),
@@ -549,8 +579,17 @@ def generate_launch_description():
             DeclareLaunchArgument("gazebo_hiker_z_offset", default_value="0.08"),
 
             # --- LoRa RF ---
-            DeclareLaunchArgument("tx_power_dbm", default_value="17.0"),
+            # EByte E220-900T22D: TX max 22 dBm (Ref: EByte datasheet v1.0)
+            DeclareLaunchArgument("tx_power_dbm", default_value="22.0"),
+            # Antena SMA 3 dBi (hardware proyek)
+            DeclareLaunchArgument("antenna_gain_db", default_value="5.0"),
+            # Terrain scatter (ITU-R P.452 rural sub-GHz: 0.5–1.5 dB/km)
+            DeclareLaunchArgument("terrain_loss_db_per_km", default_value="1.0"),
+            # SF tunggal (default). Gunakan spreading_factors untuk multi-SF per hiker.
             DeclareLaunchArgument("spreading_factor", default_value="9"),
+            # SF per hiker (comma-separated, round-robin). Contoh: "7,9,12"
+            # Jika kosong, semua hiker pakai spreading_factor di atas.
+            DeclareLaunchArgument("spreading_factors", default_value=""),
             DeclareLaunchArgument("fading_model", default_value="rayleigh"),
             DeclareLaunchArgument("rician_k_db", default_value="10.0"),
             # Cuaca & lingkungan
