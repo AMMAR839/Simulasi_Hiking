@@ -615,6 +615,19 @@ def _launch_setup(context, *args, **kwargs):
                     {"refresh_rate_hz": LaunchConfiguration("dashboard_refresh_hz")},
                 ],
             ),
+            Node(
+                package="hiking_lora_sim",
+                executable="web_dashboard",
+                output="screen",
+                condition=IfCondition(LaunchConfiguration("use_web_dashboard")),
+                parameters=[
+                    {
+                        "host": LaunchConfiguration("web_dashboard_host"),
+                        "port": LaunchConfiguration("web_dashboard_port"),
+                        "routes_file": LaunchConfiguration("routes_file"),
+                    }
+                ],
+            ),
         ]
     )
     return actions
@@ -726,6 +739,9 @@ def generate_launch_description():
             # --- Fitur 6: Dashboard ---
             DeclareLaunchArgument("use_dashboard", default_value="false"),
             DeclareLaunchArgument("dashboard_refresh_hz", default_value="0.5"),
+            DeclareLaunchArgument("use_web_dashboard", default_value="false"),
+            DeclareLaunchArgument("web_dashboard_host", default_value="0.0.0.0"),
+            DeclareLaunchArgument("web_dashboard_port", default_value="8080"),
 
             SetEnvironmentVariable(
                 "GZ_SIM_RESOURCE_PATH",

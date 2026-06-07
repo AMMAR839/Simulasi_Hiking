@@ -136,6 +136,24 @@ Jalankan dengan dashboard terminal:
 ros2 launch hiking_lora_sim hiking_lora_sim.launch.py use_dashboard:=true
 ```
 
+Jalankan dengan dashboard web interaktif React + Leaflet:
+
+```bash
+ros2 launch hiking_lora_sim hiking_lora_sim.launch.py \
+  use_web_dashboard:=true \
+  hikers_file:=/home/ammar/Documents/Simulasi_Hiking/src/hiking_lora_sim/config/random_hikers.yaml
+```
+
+Buka dashboard di browser:
+
+```text
+http://localhost:8080
+```
+
+Dashboard web menampilkan peta hiker, node LoRa, base station, obstacle radio,
+link jaringan aktif, event LoRa, dan status SOS. Tampilan React dan Leaflet
+diambil dari CDN, jadi browser perlu akses internet saat membuka dashboard.
+
 Jalankan dengan konfigurasi YAML eksternal:
 
 ```bash
@@ -163,6 +181,48 @@ Jalankan Gazebo server saja untuk debug headless:
 ros2 launch hiking_lora_sim hiking_lora_sim.launch.py trail_name:=ridge_route gz_args:='-r -s -v 2'
 ```
 
+## Kontrol Keyboard di Gazebo
+
+Simulasi mendukung kontrol pendaki langsung dari jendela Gazebo melalui Gazebo GUI plugin. Setelah Gazebo terbuka, klik/fokuskan jendela Gazebo terlebih dahulu, lalu tekan tombol kontrol.
+
+Jalankan simulasi dengan keyboard Gazebo aktif:
+
+```bash
+ros2 launch hiking_lora_sim hiking_lora_sim.launch.py \
+  use_gazebo:=true \
+  use_gazebo_gui_keyboard:=true \
+  use_keyboard_teleop:=false \
+  hikers_file:=/home/ammar/Documents/Simulasi_Hiking/src/hiking_lora_sim/config/random_hikers.yaml
+```
+
+Tombol kontrol:
+
+| Tombol | Fungsi |
+| --- | --- |
+| `1` sampai `9` | Memilih `hiker_1` sampai `hiker_9` dan kamera langsung mengikuti hiker tersebut. |
+| `0` | Memilih `hiker_10` dan kamera langsung mengikuti hiker tersebut. |
+| `W` | Menggerakkan hiker aktif maju sesuai arah hadapnya. |
+| `S` | Menggerakkan hiker aktif mundur. |
+| `A` | Membelokkan hiker aktif ke kiri. |
+| `D` | Membelokkan hiker aktif ke kanan. |
+| `B` | Mengirim SOS dari hiker aktif ke sistem monitoring. |
+| `R` | Mengembalikan hiker aktif ke mode otomatis mengikuti path. |
+| `Q` | Mengaktifkan kamera follow ke hiker aktif. |
+| `E` | Mengaktifkan kamera overview dari atas gunung. |
+| `I` / `K` | Menggeser kamera overview pada sumbu Y. |
+| `J` / `L` | Menggeser kamera overview pada sumbu X. |
+| `U` / `O` | Menurunkan atau menaikkan kamera overview. |
+| `[` / `]` | Memutar yaw kamera overview. |
+| `-` / `=` | Mengubah pitch kamera overview. |
+
+Catatan:
+
+- Tombol `WASD` hanya mengontrol hiker yang sedang aktif dipilih.
+- Hiker lain tetap berjalan otomatis mengikuti path.
+- Saat hiker aktif digerakkan manual lalu tombol dilepas, hiker berhenti di posisi terakhir.
+- Kamera follow hanya mengikuti posisi `x/y` hiker dan tidak ikut berputar saat hiker berbelok, kecuali parameter `follow_camera_yaw_mode:=hiker` dipakai.
+- Jika ingin kontrol dari terminal, gunakan `use_keyboard_teleop:=true`; untuk kontrol langsung di Gazebo, gunakan `use_gazebo_gui_keyboard:=true`.
+
 ## Topic Penting
 
 ```bash
@@ -170,6 +230,7 @@ ros2 topic echo /hiker/status
 ros2 topic echo /hiker/pose
 ros2 topic echo /hiker/gps
 ros2 topic echo /hiker/battery
+ros2 topic echo /hiker/sos
 ros2 topic echo /lora/network_event
 ros2 topic echo /base_station/hiker_location
 ros2 topic echo /lora/markers
@@ -181,6 +242,7 @@ Makna topic:
 - `/hiker/pose`: posisi lokal hiker di world Gazebo.
 - `/hiker/gps`: data GPS simulasi dengan noise, TTFF cold start, DOP, dan multipath.
 - `/hiker/battery`: status baterai perangkat hiker, TX count, estimasi sisa, voltage, low-power mode, dan effective TX power.
+- `/hiker/sos`: event SOS JSON dari hiker aktif, dipakai dashboard web dan event LoRa.
 - `/lora/network_event`: event JSON berisi status delivered/drop, entry node, rute hop, link budget, obstacle, dan margin.
 - `/base_station/hiker_location`: paket lokasi yang berhasil sampai ke base station.
 - `/lora/markers`: marker node, hiker, dan link radio untuk visualisasi.
@@ -302,6 +364,9 @@ Parameter bisa diubah lewat launch:
 - `routes_file`: path YAML eksternal untuk override route, node LoRa, base station, dan obstacle.
 - `use_dashboard`: `true` untuk menyalakan dashboard terminal.
 - `dashboard_refresh_hz`: refresh rate dashboard.
+- `use_web_dashboard`: `true` untuk menyalakan dashboard web interaktif berbasis React, WebSocket, dan Leaflet.
+- `web_dashboard_host`: host HTTP dashboard web, default `0.0.0.0`.
+- `web_dashboard_port`: port dashboard web, default `8080`.
 - `reference_lat` dan `reference_lon`: titik referensi konversi koordinat lokal ke GPS.
 
 Contoh:

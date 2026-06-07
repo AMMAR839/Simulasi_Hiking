@@ -32,12 +32,13 @@ class KeyboardTeleop(Node):
 
         self.command_pub = self.create_publisher(String, "/hiker/manual_control", 10)
         self.camera_pub = self.create_publisher(String, "/hiker/camera_control", 10)
+        self.sos_pub = self.create_publisher(String, "/hiker/sos", 10)
         self._open_keyboard()
         self.create_timer(0.02, self._poll_keyboard)
 
         self.get_logger().info(
             "Keyboard teleop ready. 1-9/0 select and follow hiker, W/S move, A/D turn, "
-            "R auto path, Q follow camera, E overview camera, X quit."
+            "B SOS, R auto path, Q follow camera, E overview camera, X quit."
         )
 
     @property
@@ -104,6 +105,10 @@ class KeyboardTeleop(Node):
             self._publish_command(mode="auto")
             return
 
+        if key == "b":
+            self._publish_sos()
+            return
+
         if key == "w":
             self._publish_command(mode="manual", forward=1.0)
         elif key == "s":
@@ -159,6 +164,22 @@ class KeyboardTeleop(Node):
         msg = String()
         msg.data = json.dumps(payload, separators=(",", ":"))
         self.camera_pub.publish(msg)
+
+    def _publish_sos(self) -> None:
+        target = self._target_hiker_id()
+        msg = String()
+        msg.data = json.dumps(
+            {
+                "target_hiker_id": target,
+                "hiker_id": target,
+                "active": True,
+                "source": "keyboard_teleop",
+                "event": "sos",
+            },
+            separators=(",", ":"),
+        )
+        self.sos_pub.publish(msg)
+        self.get_logger().warn(f"SOS requested by {target}.")
 
     def destroy_node(self) -> None:
         if self._stream is not None and self._original_termios is not None:

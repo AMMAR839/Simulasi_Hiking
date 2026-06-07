@@ -260,6 +260,9 @@ class LoraNetwork(Node):
 
         self.last_pose: Optional[PoseStamped] = None
         self.last_gps: Optional[NavSatFix] = None
+        self._sos_active = False
+        self._sos_count = 0
+        self._last_sos_source = None
 
         self.event_pub = self.create_publisher(
             String, topic_for(self.topic_prefix, "lora/network_event", "/lora/network_event"), 10
@@ -296,6 +299,7 @@ class LoraNetwork(Node):
             self._on_battery,
             10,
         )
+        self.create_subscription(String, "/hiker/sos", self._on_sos, 10)
 
         # Interval TX dihitung dari ToA dan batas duty cycle 1%/jam (ITU).
         # tx_interval = ToA / limit → persis mengisi 1% tanpa pernah melebihi.
@@ -334,6 +338,31 @@ class LoraNetwork(Node):
                 self._humidity_pct = float(data["humidity_pct"])
         except (json.JSONDecodeError, ValueError):
             pass
+
+    def _on_sos(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+
+        target = str(
+            data.get("target_hiker_id", data.get("hiker_id", data.get("target", "")))
+        ).strip()
+        if not self._target_matches(target):
+            return
+
+        self._sos_active = parameter_as_bool(data.get("active", True))
+        self._last_sos_source = data.get("source", "unknown")
+        if self._sos_active:
+            self._sos_count += 1
+            self.get_logger().warn(f"SOS flag set for {self.hiker_id}; next LoRa events will carry SOS.")
+        else:
+            self.get_logger().info(f"SOS flag cleared for {self.hiker_id}.")
+
+    def _target_matches(self, target: str) -> bool:
+        if target == self.hiker_id:
+            return True
+        return self.hiker_id == "hiker" and target in {"hiker", "hiker_1"}
 
     # -----------------------------------------------------------------------
     # Duty cycle
@@ -614,6 +643,9 @@ class LoraNetwork(Node):
             "temperature_c": round(self._temperature_c, 1),
             "humidity_pct":  round(self._humidity_pct, 1),
             "active_hiker_count": self.active_hiker_count,
+            "sos_active": self._sos_active,
+            "sos_count": self._sos_count,
+            "sos_source": self._last_sos_source,
         }
 
         msg = String()
@@ -637,6 +669,8 @@ class LoraNetwork(Node):
                     "weather":           self.weather,
                     "end_to_end_latency_ms": latency["end_to_end_latency_ms"],
                     "sequence_number":   protocol["sequence_number"],
+                    "sos_active":        self._sos_active,
+                    "sos_count":         self._sos_count,
                 },
                 separators=(",", ":"),
             )

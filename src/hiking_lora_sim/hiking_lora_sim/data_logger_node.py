@@ -64,6 +64,8 @@ _NET_FIELDS = [
     "weather", "temperature_c", "humidity_pct",
     # Rute
     "entry_node", "route", "hop_count",
+    # SOS
+    "sos_active", "sos_count", "sos_source",
 ]
 
 
@@ -209,6 +211,10 @@ class DataLoggerNode(Node):
             "entry_node":        ev.get("entry_node", ""),
             "route":            " -> ".join(ev.get("route", [])),
             "hop_count":        ev.get("hop_count", ""),
+            # SOS
+            "sos_active":        ev.get("sos_active", False),
+            "sos_count":         ev.get("sos_count", ""),
+            "sos_source":        ev.get("sos_source", ""),
         })
         self._net_file.flush()
         self._net_count += 1
