@@ -23,6 +23,7 @@ from hiking_lora_sim.scenario import (
     TRAILS,
     WORLD_EXTENT,
     load_scenario_yaml,
+    terrain_height_world,
 )
 
 
@@ -165,7 +166,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
     .lg{display:flex;align-items:center;gap:4px;font-size:9px;color:var(--muted)}
     .sw.circle{width:7px;height:7px;border-radius:50%}
     .sw.box{width:7px;height:7px;border-radius:2px}
+    .sw.tri{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:9px solid #d79025}
     .sw.line{width:12px;height:3px;border-radius:1px}
+    .sw.terrain{width:18px;height:7px;border-radius:2px;background:linear-gradient(90deg,#4052aa,#24a6d0,#22c882,#eef08a,#9b7064,#faf8f2)}
+    .terrain-contour{image-rendering:auto}
 
     /* ── tabs ── */
     .tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
@@ -264,12 +268,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
     .leaflet-popup-content{font-family:var(--font)!important;font-size:11px!important;line-height:1.55!important}
 
     /* ── markers ── */
-    .mk-h,.mk-r,.mk-b{display:grid;place-items:center;border:2px solid rgba(255,255,255,.75);border-radius:50%;transition:transform .15s}
+    .mk-h,.mk-b{display:grid;place-items:center;border:2px solid rgba(255,255,255,.85);transition:transform .15s}
     .mk-h{width:24px;height:24px;background:var(--blue);color:#fff;font-size:8.5px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;user-select:none}
     .mk-h.sel{width:32px;height:32px;font-size:11px;background:#1a3d6e;border-color:#fff;box-shadow:0 0 0 3px rgba(77,143,214,.35),0 4px 12px rgba(0,0,0,.4)}
     .mk-h.sos{background:var(--red);border-color:rgba(255,200,200,.8)}
-    .mk-r{width:14px;height:14px;border-radius:4px;background:var(--violet);box-shadow:0 2px 6px rgba(0,0,0,.25)}
-    .mk-b{width:18px;height:18px;background:var(--teal);box-shadow:0 2px 8px rgba(0,0,0,.25)}
+    .mk-r{display:grid;place-items:center;width:21px;height:21px;color:#d79025;font-size:22px;line-height:21px;text-shadow:-1px 0 #4d3210,0 1px #4d3210,1px 0 #4d3210,0 -1px #4d3210,0 2px 5px rgba(0,0,0,.30)}
+    .mk-b{width:18px;height:18px;border-radius:3px;background:#2d72bf;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+    .map-label{background:transparent;border:0;box-shadow:none;color:#1d2c36;font-size:11px;font-weight:600;text-shadow:0 1px 2px rgba(255,255,255,.72);pointer-events:none}
+    .map-label.small{font-size:10px;font-weight:500}
+    .map-label.base{color:#1f73c9;font-weight:700}
 
     @media(max-width:900px){
       html,body{overflow:auto}
@@ -315,7 +322,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
       <!-- sparklines -->
       <div class="pnl">
-        <div class="ph"><div class="tl">signal trend</div><div class="sv">60 sampel terakhir</div></div>
+        <div class="ph"><div class="tl">signal trend</div><div class="sv" id="trend-scope">keseluruhan · 60 sampel terakhir</div></div>
         <div class="pb">
           <div class="sgrid">
             <div class="sc" data-tip="PDR — Packet Delivery Rate. Makin tinggi makin baik.">
@@ -364,11 +371,12 @@ _DASHBOARD_HTML = r"""<!doctype html>
           </div>
             <div class="lgnd">
               <div class="lg"><span class="sw circle" style="background:var(--blue)"></span>hiker</div>
-              <div class="lg"><span class="sw box" style="background:var(--violet)"></span>relay</div>
-              <div class="lg"><span class="sw circle" style="background:var(--teal)"></span>base</div>
+              <div class="lg"><span class="sw tri"></span>relay</div>
+              <div class="lg"><span class="sw box" style="background:#2d72bf"></span>base</div>
               <div class="lg"><span class="sw line" style="background:var(--green)"></span>link kuat</div>
               <div class="lg"><span class="sw line" style="background:var(--amber)"></span>marginal</div>
               <div class="lg"><span class="sw line" style="background:var(--red)"></span>sos/drop</div>
+              <div class="lg"><span class="sw terrain"></span>ketinggian</div>
             </div>
         </div>
       </div>
@@ -477,7 +485,20 @@ const S = {
   events: [], sosEvents: [],
   firstFit: false, _sceneDone: false,
 };
-const H = { pdr:[], lat:[], snr:[], mrg:[] };
+const H = { overall: makeTrend(), byHiker: {} };
+
+function makeTrend() {
+  return { pdr: [], lat: [], snr: [], mrg: [], total: 0, delivered: 0 };
+}
+
+function hikerTrend(hikerId) {
+  if (!H.byHiker[hikerId]) H.byHiker[hikerId] = makeTrend();
+  return H.byHiker[hikerId];
+}
+
+function activeTrend() {
+  return S.selectedId ? hikerTrend(S.selectedId) : H.overall;
+}
 
 // ── debounced render: coalesce rapid WS updates into one rAF ──
 let _renderPending = false;
@@ -690,10 +711,11 @@ function spark(canvas, data, color, refVal) {
 }
 
 function redrawSparks() {
-  spark(document.getElementById('sp-pdr'), H.pdr, getCSS('--green')||'#5aaa5a', 80);
-  spark(document.getElementById('sp-lat'), H.lat, getCSS('--teal')||'#3dab7e');
-  spark(document.getElementById('sp-snr'), H.snr, getCSS('--blue')||'#4d8fd6');
-  spark(document.getElementById('sp-mrg'), H.mrg, getCSS('--amber')||'#c8883a');
+  const t = activeTrend();
+  spark(document.getElementById('sp-pdr'), t.pdr, getCSS('--green')||'#5aaa5a', 80);
+  spark(document.getElementById('sp-lat'), t.lat, getCSS('--teal')||'#3dab7e');
+  spark(document.getElementById('sp-snr'), t.snr, getCSS('--blue')||'#4d8fd6');
+  spark(document.getElementById('sp-mrg'), t.mrg, getCSS('--amber')||'#c8883a');
 }
 
 /* ══════════════════════════════════════
@@ -705,8 +727,202 @@ function sid(id) { const p=String(id||'?').split('_'); return p.length>1?p[1]:p[
 function xy(x,y) { return [Number(y), Number(x)]; }
 function bcls(p) { const n=Number(p); return !Number.isFinite(n)?'mid':n>=60?'hi':n>=25?'mid':'lo'; }
 function push60(arr, v) { const n=Number(v); if(!Number.isFinite(n))return; arr.push(n); if(arr.length>60)arr.shift(); }
+function lastVal(arr) { return arr && arr.length ? arr[arr.length - 1] : null; }
+function trendEventMargin(ev) {
+  const margins = Array.isArray(ev?.links)
+    ? ev.links.map(l => Number(l.margin_db)).filter(Number.isFinite)
+    : [];
+  if (margins.length) return Math.min(...margins);
+  const m = Number(ev?.margin_db);
+  return Number.isFinite(m) ? m : null;
+}
+function trendEventSnr(ev) {
+  const s = Number(ev?.snr_db);
+  if (Number.isFinite(s)) return s;
+  const snrs = Array.isArray(ev?.links)
+    ? ev.links.map(l => Number(l.snr_db)).filter(Number.isFinite)
+    : [];
+  return snrs.length ? Math.min(...snrs) : null;
+}
+function addTrendEvent(trend, ev, pdrOverride) {
+  if (!trend || !ev) return;
+  trend.total += 1;
+  if (ev.delivered) trend.delivered += 1;
+  const pdr = Number.isFinite(Number(pdrOverride))
+    ? Number(pdrOverride)
+    : (trend.total ? trend.delivered / trend.total * 100.0 : 0.0);
+  push60(trend.pdr, pdr);
+  push60(trend.lat, ev.end_to_end_latency_ms);
+  push60(trend.snr, trendEventSnr(ev));
+  push60(trend.mrg, trendEventMargin(ev));
+}
+function resetTrends() {
+  H.overall = makeTrend();
+  H.byHiker = {};
+}
+function rebuildTrends(events) {
+  resetTrends();
+  const ordered = Array.isArray(events) ? [...events].reverse() : [];
+  ordered.forEach(ev => {
+    if (!ev || !ev.hiker_id) return;
+    addTrendEvent(H.overall, ev);
+    addTrendEvent(hikerTrend(ev.hiker_id), ev);
+  });
+}
 const wLabel = { clear:'Cerah ☀', fog:'Kabut 🌫', light_rain:'Hujan ringan 🌦', heavy_rain:'Hujan lebat 🌧', thunderstorm:'Badai ⛈' };
-const routeCol = { ridge_route:'#4d8fd6', valley_route:'#c8883a', crater_route:'#c45050' };
+const routeCol = { ridge_route:'#e46e1d', valley_route:'#2f6fd6', crater_route:'#6b42c7' };
+const terrainBins = [
+  [0.035, [70, 80, 170]],
+  [0.090, [58, 111, 199]],
+  [0.145, [42, 147, 220]],
+  [0.200, [32, 174, 211]],
+  [0.260, [31, 190, 181]],
+  [0.320, [33, 203, 139]],
+  [0.385, [67, 212, 111]],
+  [0.450, [119, 220, 105]],
+  [0.515, [176, 225, 116]],
+  [0.580, [226, 231, 128]],
+  [0.645, [238, 220, 142]],
+  [0.705, [218, 193, 134]],
+  [0.765, [197, 164, 120]],
+  [0.825, [170, 132, 105]],
+  [0.875, [145, 109, 101]],
+  [0.925, [180, 165, 158]],
+  [0.970, [218, 209, 204]],
+  [1.010, [250, 248, 242]],
+];
+
+function terrainRgb(v, mn, mx) {
+  const span = Math.max(0.001, Number(mx) - Number(mn));
+  const t = Math.max(0, Math.min(1, (Number(v) - Number(mn)) / span));
+  for (const [limit, rgb] of terrainBins) {
+    if (t <= limit) return rgb;
+  }
+  return [233, 226, 209];
+}
+
+function _terrainVal(vals, cols, rows, x, y) {
+  const xx = Math.max(0, Math.min(cols - 1, x));
+  const yy = Math.max(0, Math.min(rows - 1, y));
+  return Number(vals[(rows - 1 - yy) * cols + xx]);
+}
+
+function _edgeCross(a, b, level, ax, ay, bx, by) {
+  if ((a < level && b < level) || (a > level && b > level) || a === b) return null;
+  const t = (level - a) / (b - a);
+  return [ax + (bx - ax) * t, ay + (by - ay) * t];
+}
+
+function drawContourLines(ctx, vals, cols, rows, minH, maxH) {
+  const levels = Array.from({ length: 30 }, (_, i) => minH + (maxH - minH) * ((i + 1) / 31));
+  ctx.save();
+  ctx.strokeStyle = 'rgba(58,57,50,.23)';
+  ctx.lineWidth = 0.22;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  levels.forEach(level => {
+    ctx.beginPath();
+    for (let y = 0; y < rows - 1; y++) {
+      for (let x = 0; x < cols - 1; x++) {
+        const tl = _terrainVal(vals, cols, rows, x, y);
+        const tr = _terrainVal(vals, cols, rows, x + 1, y);
+        const br = _terrainVal(vals, cols, rows, x + 1, y + 1);
+        const bl = _terrainVal(vals, cols, rows, x, y + 1);
+        const pts = [
+          _edgeCross(tl, tr, level, x, y, x + 1, y),
+          _edgeCross(tr, br, level, x + 1, y, x + 1, y + 1),
+          _edgeCross(br, bl, level, x + 1, y + 1, x, y + 1),
+          _edgeCross(bl, tl, level, x, y + 1, x, y),
+        ].filter(Boolean);
+        if (pts.length >= 2) {
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          ctx.lineTo(pts[1][0], pts[1][1]);
+        }
+        if (pts.length === 4) {
+          ctx.moveTo(pts[2][0], pts[2][1]);
+          ctx.lineTo(pts[3][0], pts[3][1]);
+        }
+      }
+    }
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function drawTerrainLayer(terrain, bounds) {
+  const cols = Number(terrain?.cols || 0);
+  const rows = Number(terrain?.rows || 0);
+  const vals = terrain?.values || [];
+  if (!cols || !rows || vals.length !== cols * rows) return;
+
+  const scale = 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = cols * scale;
+  canvas.height = rows * scale;
+  const ctx = canvas.getContext('2d');
+  const minH = Number(terrain.min_h);
+  const maxH = Number(terrain.max_h);
+
+  ctx.imageSmoothingEnabled = false;
+  for (let py = 0; py < rows; py++) {
+    const srcY = rows - 1 - py;
+    for (let x = 0; x < cols; x++) {
+      const h = Number(vals[srcY * cols + x]);
+      const rgb = terrainRgb(h, minH, maxH);
+      ctx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+      ctx.fillRect(x * scale, py * scale, scale, scale);
+    }
+  }
+
+  ctx.save();
+  ctx.scale(scale, scale);
+  drawContourLines(ctx, vals, cols, rows, minH, maxH);
+  ctx.restore();
+
+  L.imageOverlay(canvas.toDataURL('image/png'), bounds, {
+    opacity: 0.80,
+    interactive: false,
+    className: 'terrain-contour'
+  }).addTo(ML.scene);
+}
+
+function labelHtml(text, cls='') {
+  return L.divIcon({
+    className: `map-label ${cls}`,
+    html: String(text || '').replace(/_/g, '_'),
+    iconSize: [96, 28],
+    iconAnchor: [0, 12]
+  });
+}
+
+function addMapLabel(x, y, text, cls='', dx=2.5, dy=2.5) {
+  L.marker(xy(Number(x) + dx, Number(y) + dy), {
+    icon: labelHtml(text, cls),
+    interactive: false,
+    keyboard: false
+  }).addTo(ML.scene);
+}
+
+function obstacleStyle(obs) {
+  const kind = String(obs.kind || '').toLowerCase();
+  if (kind.includes('tree')) {
+    return { color:'rgba(77,145,93,.55)', fillColor:'rgba(86,166,105,.28)' };
+  }
+  if (kind.includes('rock')) {
+    return { color:'rgba(113,103,91,.50)', fillColor:'rgba(135,124,108,.22)' };
+  }
+  if (kind.includes('crater') || kind.includes('terrain')) {
+    return { color:'rgba(126,82,196,.48)', fillColor:'rgba(126,82,196,.18)' };
+  }
+  return { color:'rgba(200,136,58,.55)', fillColor:'rgba(200,136,58,.18)' };
+}
+
+function obstacleLabel(name) {
+  const parts = String(name || '').split('_');
+  if (parts.length <= 2) return parts.join('_');
+  return parts.join('<br>');
+}
 
 /* ══════════════════════════════════════
    MAP
@@ -733,6 +949,11 @@ document.getElementById('mc-theme').onclick = () => {
   redrawSparks();
 };
 document.documentElement.setAttribute('data-theme', localStorage.getItem('sl-theme') || 'dark');
+
+function toggleSelectedHiker(hikerId) {
+  S.selectedId = S.selectedId === hikerId ? null : hikerId;
+  renderAll();
+}
 
 /* ══════════════════════════════════════
    TOOLTIP
@@ -767,25 +988,46 @@ function renderScene() {
   ML.scene.clearLayers();
   const ext = Number(S.scenario.extent || 120);
   sceneBounds = [[-ext, -ext], [ext, ext]];
+
+  const terrain = S.scenario.terrain || null;
+  if (terrain) drawTerrainLayer(terrain, sceneBounds);
+
   L.rectangle(sceneBounds, { color: 'rgba(77,143,214,.3)', weight: .7, fillOpacity: .02 }).addTo(ML.scene);
 
   Object.entries(S.scenario.trails || {}).forEach(([name, pts]) => {
+    const color = routeCol[name] || '#4d8fd6';
     L.polyline(pts.map(p => xy(p[0], p[1])), {
-      color: routeCol[name] || '#4d8fd6', weight: 2.2, opacity: .75
+      color, weight: 3.6, opacity: .95
     }).bindTooltip(`<b>${name.replace(/_/g,' ')}</b>`, { sticky: true }).addTo(ML.scene);
+    pts.forEach(p => {
+      L.circleMarker(xy(p[0], p[1]), {
+        radius: 2.2,
+        color,
+        weight: 0,
+        fillColor: color,
+        fillOpacity: 0.9,
+        interactive: false
+      }).addTo(ML.scene);
+    });
   });
 
   (S.scenario.obstacles || []).forEach(obs => {
+    const st = obstacleStyle(obs);
     L.circle(xy(obs.x, obs.y), {
-      radius: Number(obs.radius), color: 'rgba(200,136,58,.65)', weight: .7,
-      fillOpacity: .09
+      radius: Number(obs.radius),
+      color: st.color,
+      fillColor: st.fillColor,
+      weight: 1.2,
+      fillOpacity: 1.0
     }).bindTooltip(`<b>${obs.name}</b><br>${obs.kind} — loss ${obs.loss_db} dB`, { sticky: true }).addTo(ML.scene);
+    addMapLabel(obs.x, obs.y, obstacleLabel(obs.name), 'small', -4, 2);
   });
 
   (S.scenario.lora_nodes || []).forEach(node => {
     L.marker(xy(node.x, node.y), {
-      icon: L.divIcon({ className: '', html: '<div class="mk-r"></div>', iconSize: [14,14], iconAnchor: [7,7] })
+      icon: L.divIcon({ className: '', html: '<div class="mk-r">▲</div>', iconSize: [22,22], iconAnchor: [11,15] })
     }).addTo(ML.scene).bindTooltip(`<b>${node.name}</b><br>Relay node`, { sticky: true });
+    addMapLabel(node.x, node.y, node.name, '', 2.5, 2.5);
   });
 
   if (S.scenario.base_station) {
@@ -793,6 +1035,7 @@ function renderScene() {
     L.marker(xy(b.x, b.y), {
       icon: L.divIcon({ className: '', html: '<div class="mk-b"></div>', iconSize: [18,18], iconAnchor: [9,9] })
     }).addTo(ML.scene).bindTooltip(`<b>${b.name}</b><br>Base station`, { sticky: true });
+    addMapLabel(b.x, b.y, b.name || 'base', 'base', 2.5, -5.0);
   }
 
   if (!S.firstFit) {
@@ -804,11 +1047,24 @@ function renderScene() {
 /* ══════════════════════════════════════
    HIKER MARKERS — persistent, diff-updated (no flicker)
 ══════════════════════════════════════ */
-const _mkCache = {};   // hiker_id → { marker, lastKey }
+const _mkCache = {};   // hiker_id → { marker, visualKey }
 
-function _mkKey(h) {
-  // key encodes everything that affects the marker visual/position
-  return `${h.x},${h.y},${h.sos_active?1:0},${S.selectedId===h.hiker_id?1:0}`;
+function _mkVisualKey(h) {
+  // Only values that change marker appearance, not position.
+  return `${h.sos_active?1:0},${S.selectedId===h.hiker_id?1:0}`;
+}
+
+function _mkIcon(h) {
+  const isSel = S.selectedId === h.hiker_id;
+  const cls   = `mk-h${isSel ? ' sel' : ''}${h.sos_active ? ' sos' : ''}`;
+  const sz    = isSel ? 32 : 24;
+  const hitSz = sz + 8;
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:${hitSz}px;height:${hitSz}px;display:flex;align-items:center;justify-content:center"><div class="${cls}" style="width:${sz}px;height:${sz}px;flex-shrink:0">${sid(h.hiker_id)}</div></div>`,
+    iconSize:   [hitSz, hitSz],
+    iconAnchor: [hitSz / 2, hitSz / 2]
+  });
 }
 
 function syncMarkers(hikers) {
@@ -816,40 +1072,35 @@ function syncMarkers(hikers) {
   hikers.forEach(h => {
     if (h.x === undefined || h.y === undefined) return;
     seen.add(h.hiker_id);
-    const key = _mkKey(h);
-    if (_mkCache[h.hiker_id] && _mkCache[h.hiker_id].lastKey === key) return; // no change
+    const visualKey = _mkVisualKey(h);
+    const cached = _mkCache[h.hiker_id];
 
-    // remove old marker if exists
-    if (_mkCache[h.hiker_id]) {
-      ML.hikers.removeLayer(_mkCache[h.hiker_id].marker);
+    if (cached) {
+      cached.marker.setLatLng(xy(h.x, h.y));
+      if (cached.visualKey !== visualKey) {
+        cached.marker.setIcon(_mkIcon(h));
+        cached.marker.setZIndexOffset(S.selectedId === h.hiker_id ? 1000 : 500);
+        cached.visualKey = visualKey;
+      }
+      return;
     }
 
-    const isSel = S.selectedId === h.hiker_id;
-    const cls   = `mk-h${isSel ? ' sel' : ''}${h.sos_active ? ' sos' : ''}`;
-    const sz    = isSel ? 32 : 24;
-    const hitSz = sz + 8;
-    const icon  = L.divIcon({
-      className: '',
-      html: `<div style="width:${hitSz}px;height:${hitSz}px;display:flex;align-items:center;justify-content:center"><div class="${cls}" style="width:${sz}px;height:${sz}px;flex-shrink:0">${sid(h.hiker_id)}</div></div>`,
-      iconSize:   [hitSz, hitSz],
-      iconAnchor: [hitSz / 2, hitSz / 2]
-    });
     const mk = L.marker(xy(h.x, h.y), {
-      icon, interactive: true, zIndexOffset: isSel ? 1000 : 500
+      icon: _mkIcon(h),
+      interactive: true,
+      zIndexOffset: S.selectedId === h.hiker_id ? 1000 : 500
     }).addTo(ML.hikers);
 
-    // tooltip: use permanent=false, sticky=false to avoid flicker on re-hover
     mk.bindTooltip(
       () => `<b>${h.hiker_id}</b>${S.hikers[h.hiker_id]?.sos_active ? ' 🆘' : ''}<br>${(S.hikers[h.hiker_id]?.trail||'').replace(/_/g,' ')}<br>bat ${S.hikers[h.hiker_id]?.battery_pct ?? '-'}%`,
       { sticky: true, opacity: 0.92 }
     );
 
     mk.on('click', () => {
-      S.selectedId = h.hiker_id;
-      renderAll();
+      toggleSelectedHiker(h.hiker_id);
     });
 
-    _mkCache[h.hiker_id] = { marker: mk, lastKey: key };
+    _mkCache[h.hiker_id] = { marker: mk, visualKey };
   });
 
   // remove markers for hikers no longer present
@@ -888,6 +1139,7 @@ function renderHikers() {
 
   // Set ID yang aktif sekarang
   const currentIds = new Set(hikers.map(h => h.hiker_id));
+  if (S.selectedId && !currentIds.has(S.selectedId)) S.selectedId = null;
 
   // Hapus card yang pendakinya udah gak ada di data
   Array.from(listEl.children).forEach(child => {
@@ -940,6 +1192,7 @@ function renderSelected() {
 
   if (!h) {
     document.getElementById('sel-card').innerHTML = `<div class="selr"><strong>—</strong><span style="font-size:9px;color:var(--muted)">klik pendaki untuk detail</span></div><div class="selb">Pilih pendaki dari daftar atau klik marker di peta.</div>`;
+    document.getElementById('lnk-ctx').textContent = 'keseluruhan';
     return;
   }
 
@@ -1055,27 +1308,24 @@ function renderSos() {
 ══════════════════════════════════════ */
 function renderStats() {
   const latest = S.events[0] || null;
-  const lkEv   = selLinkEv();
-  const fl     = lkEv?.links?.[0] || latest?.links?.[0] || null;
+  const scopedTrend = activeTrend();
+  const overallLat = lastVal(H.overall.lat);
+  const pdrV = S.selectedId ? lastVal(scopedTrend.pdr) : (Number.isFinite(Number(S.stats.pdr_pct)) ? Number(S.stats.pdr_pct) : lastVal(scopedTrend.pdr));
+  const latV = lastVal(scopedTrend.lat);
+  const snrV = lastVal(scopedTrend.snr);
+  const mrgV = lastVal(scopedTrend.mrg);
 
-  push60(H.pdr, S.stats.pdr_pct || 0);
-  push60(H.lat, latest?.end_to_end_latency_ms);
-  push60(H.snr, fl?.snr_db ?? latest?.snr_db);
-  push60(H.mrg, fl?.margin_db ?? latest?.margin_db);
-
-  if (latest?.end_to_end_latency_ms != null) ekgPush(Number(latest.end_to_end_latency_ms));
-
-  const latV = H.lat.length ? H.lat[H.lat.length - 1] : null;
   document.getElementById('mv-pdr').textContent = `${fmt(S.stats.pdr_pct || 0, 1)}%`;
-  document.getElementById('mv-lat').textContent = latV != null ? `${fmt(latV, 0)} ms` : '—';
-  document.getElementById('lat-now').textContent = latV != null ? `${fmt(latV, 0)} ms` : '— ms';
-  document.getElementById('lat-cap').textContent = latV != null ? `${fmt(latV, 0)} ms · target 30 s` : '—';
+  document.getElementById('mv-lat').textContent = overallLat != null ? `${fmt(overallLat, 0)} ms` : '—';
+  document.getElementById('lat-now').textContent = overallLat != null ? `${fmt(overallLat, 0)} ms` : '— ms';
+  document.getElementById('lat-cap').textContent = overallLat != null ? `${fmt(overallLat, 0)} ms · target 30 s` : '—';
   document.getElementById('sum-st').textContent  = S.events.length ? 'live' : 'waiting';
 
-  document.getElementById('sp-pdr-v').textContent = `${fmt(S.stats.pdr_pct || 0, 1)}%`;
+  document.getElementById('trend-scope').textContent = S.selectedId ? `${S.selectedId} · 60 sampel terakhir` : 'keseluruhan · 60 sampel terakhir';
+  document.getElementById('sp-pdr-v').textContent = pdrV != null ? `${fmt(pdrV, 1)}%` : '—';
   document.getElementById('sp-lat-v').textContent = latV != null ? `${fmt(latV, 0)} ms` : '—';
-  document.getElementById('sp-snr-v').textContent = latest ? `${fmt(latest.snr_db, 1)} dB` : '—';
-  document.getElementById('sp-mrg-v').textContent = fl ? `${fmt(fl.margin_db, 1)} dB` : '—';
+  document.getElementById('sp-snr-v').textContent = snrV != null ? `${fmt(snrV, 1)} dB` : '—';
+  document.getElementById('sp-mrg-v').textContent = mrgV != null ? `${fmt(mrgV, 1)} dB` : '—';
 
   const sf = latest?.sf ?? S.scenario?.default_sf ?? '—';
   const toa = latest?.toa_ms ?? latest?.time_on_air_ms ?? '—';
@@ -1129,8 +1379,7 @@ function onSnapshot(d) {
   S.stats      = d.stats    || S.stats;
   S.events     = Array.isArray(d.events)     ? d.events     : [];
   S.sosEvents  = Array.isArray(d.sos_events) ? d.sos_events : [];
-  if (!S.selectedId && Object.keys(S.hikers).length)
-    S.selectedId = Object.keys(S.hikers).sort()[0];
+  rebuildTrends(S.events);
   scheduleRender();
 }
 function onNetworkEv(d) {
@@ -1138,16 +1387,16 @@ function onNetworkEv(d) {
   if (!ev || !ev.hiker_id) return;
   S.events = [ev, ...S.events].slice(0, 12);
   if (d.stats) S.stats = d.stats;
-  if (ev.hiker_local && typeof ev.hiker_local === 'object') {
-    S.hikers[ev.hiker_id] = { ...(S.hikers[ev.hiker_id] || { hiker_id: ev.hiker_id }), x: ev.hiker_local.x, y: ev.hiker_local.y, altitude_m: ev.hiker_local.alt_m };
-  }
+  addTrendEvent(H.overall, ev, d.stats?.pdr_pct ?? S.stats?.pdr_pct);
+  addTrendEvent(hikerTrend(ev.hiker_id), ev);
+  if (ev.end_to_end_latency_ms != null) ekgPush(Number(ev.end_to_end_latency_ms));
+  if (!S.hikers[ev.hiker_id]) S.hikers[ev.hiker_id] = { hiker_id: ev.hiker_id };
   if (ev.sos_active !== undefined) S.hikers[ev.hiker_id] = { ...(S.hikers[ev.hiker_id] || { hiker_id: ev.hiker_id }), sos_active: Boolean(ev.sos_active) };
   scheduleRender();
 }
 function onStatus(d) {
   if (!d || !d.hiker_id) return;
   S.hikers[d.hiker_id] = { ...(S.hikers[d.hiker_id] || { hiker_id: d.hiker_id }), ...d };
-  if (!S.selectedId) S.selectedId = d.hiker_id;
   scheduleRender();
 }
 function onSos(d) {
@@ -1203,8 +1452,7 @@ window.addEventListener('beforeunload', () => { closedByUs=true; clearTimeout(re
 document.getElementById('hk-list').addEventListener('mousedown', e => {
   const card = e.target.closest('.hcard');
   if (!card) return;
-  S.selectedId = card.dataset.hid;
-  renderAll();
+  toggleSelectedHiker(card.dataset.hid);
 });
 
 ekgInit();
@@ -1250,6 +1498,32 @@ def _obstacle_dict(obstacle) -> Dict:
         "radius": obstacle.radius,
         "loss_db": obstacle.loss_db,
         "kind": obstacle.kind,
+    }
+
+
+def _terrain_payload(extent: float = WORLD_EXTENT, step: float = 1.0) -> Dict:
+    values = []
+    min_h = float("inf")
+    max_h = float("-inf")
+
+    count = int((extent * 2.0) / step)
+    start = -extent + step / 2.0
+    for yi in range(count):
+        y = start + yi * step
+        for xi in range(count):
+            x = start + xi * step
+            h = terrain_height_world(x, y)
+            min_h = min(min_h, h)
+            max_h = max(max_h, h)
+            values.append(round(h, 3))
+
+    return {
+        "step": step,
+        "rows": count,
+        "cols": count,
+        "min_h": round(min_h, 3),
+        "max_h": round(max_h, 3),
+        "values": values,
     }
 
 
@@ -1456,6 +1730,7 @@ class WebDashboardNode(Node):
             "lora_nodes": [_station_dict(station) for station in self._lora_nodes],
             "base_station": _station_dict(self._base_station),
             "obstacles": [_obstacle_dict(obstacle) for obstacle in self._radio_obstacles],
+            "terrain": _terrain_payload(WORLD_EXTENT),
         }
 
     def _stats_payload(self) -> Dict:
