@@ -20,12 +20,18 @@ hasil_analisis.png
 
 # Generated report, graph, and video artifacts
 BAB_10*.md
+DOKUMENTASI_LENGKAP.md
 GRAFIK_HASIL_POC.md
+METODE_ERROR_SIMULASI.md
+PPT_*.md
+*.pptx
 VIDEO_SCRIPT_POC*.md
 bab10_10hiker_figures/
 figures_bab10_revisi/
 figures_poc_sim/
 grafik_hasil/
+grafik_run_*/
+ppt_assets/
 video_assets/
 video_poc_figures/
 
