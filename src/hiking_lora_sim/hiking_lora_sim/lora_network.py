@@ -755,7 +755,7 @@ class LoraNetwork(Node):
             if route and route[-1] == self._base_station.name:
                 radio_node = self.radio_station(candidate_node)
                 display_link = self.link_budget(hiker, radio_node, with_fading=True)
-                return candidate_node, display_link
+                return candidate_node, display_link     
 
         return None, None
 
